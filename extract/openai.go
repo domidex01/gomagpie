@@ -37,9 +37,10 @@ func (o *OpenAIAdapter) Extract(ctx context.Context, in ExtractInput) (ExtractRe
 	if in.Schema == nil {
 		return ExtractResult{}, fmt.Errorf("extract: nil schema")
 	}
-	var schemaDoc any
-	raw, _ := json.Marshal(in.Schema.Raw)
-	_ = json.Unmarshal(raw, &schemaDoc)
+	doc, err := schemaDoc(in.Schema.Raw)
+	if err != nil {
+		return ExtractResult{}, err
+	}
 	call := func(ctx context.Context, system, user string) (string, int, int, error) {
 		body := map[string]any{
 			"model": o.Model,
@@ -52,7 +53,7 @@ func (o *OpenAIAdapter) Extract(ctx context.Context, in ExtractInput) (ExtractRe
 				"json_schema": map[string]any{
 					"name":   "gomagpie",
 					"strict": true,
-					"schema": schemaDoc,
+					"schema": doc,
 				},
 			},
 		}
@@ -60,7 +61,7 @@ func (o *OpenAIAdapter) Extract(ctx context.Context, in ExtractInput) (ExtractRe
 		if o.APIKey != "" {
 			headers["Authorization"] = "Bearer " + o.APIKey
 		}
-		out, err := postJSON(ctx, o.BaseURL+"/chat/completions", o.APIKey, headers, body)
+		out, err := postJSON(ctx, o.BaseURL+"/chat/completions", headers, body)
 		if err != nil {
 			return "", 0, 0, err
 		}

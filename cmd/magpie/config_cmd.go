@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	"gomagpie/config"
+
+	"github.com/spf13/cobra"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -40,7 +41,10 @@ func newConfigCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			b, _ := json.MarshalIndent(cfg.Redacted(), "", "  ")
+			b, err := json.MarshalIndent(cfg.Redacted(), "", "  ")
+			if err != nil {
+				return fmt.Errorf("config show: %w", err)
+			}
 			fmt.Println(string(b))
 			return nil
 		},

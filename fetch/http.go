@@ -19,17 +19,11 @@ type StaticFetcher struct {
 	ua     string
 }
 
-var headerBundles = []map[string]string{
-	{
-		"User-Agent":      "magpie/1.0 (+https://github.com/you/gomagpie)",
-		"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-		"Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
-	},
-	{
-		"User-Agent":      "magpie/1.0 (+https://github.com/you/gomagpie)",
-		"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-		"Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
-	},
+// defaultHeaders is the single static-fetch header bundle (spec §1.3).
+var defaultHeaders = map[string]string{
+	"User-Agent":      "magpie/1.0 (+https://github.com/you/gomagpie)",
+	"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+	"Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
 }
 
 // NewStaticFetcher builds the spec §1.3 transport verbatim, plus a file://
@@ -62,7 +56,7 @@ func NewStaticFetcher() (*StaticFetcher, error) {
 			return nil
 		},
 	}
-	return &StaticFetcher{client: client, ua: headerBundles[0]["User-Agent"]}, nil
+	return &StaticFetcher{client: client, ua: defaultHeaders["User-Agent"]}, nil
 }
 
 // CanHandle is always true for the static fetcher.
@@ -83,15 +77,14 @@ func (s *StaticFetcher) Fetch(ctx context.Context, req FetchRequest) (*FetchResp
 	if err != nil {
 		return nil, fmt.Errorf("fetch: %w", err)
 	}
-	b := headerBundles[0]
-	for k, v := range b {
+	for k, v := range defaultHeaders {
 		hreq.Header.Set(k, v)
 	}
 	resp, err := s.client.Do(hreq)
 	if err != nil {
 		return nil, fmt.Errorf("fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // body fully read above; close error unactionable
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
 	if err != nil {
 		return nil, fmt.Errorf("fetch: read body: %w", err)

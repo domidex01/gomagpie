@@ -26,7 +26,11 @@ func newFakeProvider(t *testing.T, script ...string) (*httptest.Server, *fakePro
 	t.Helper()
 	fp := &fakeProvider{t: t, script: script, status: 200}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, rerr := io.ReadAll(r.Body)
+		if rerr != nil {
+			http.Error(w, rerr.Error(), http.StatusBadRequest)
+			return
+		}
 		fp.mu.Lock()
 		defer fp.mu.Unlock()
 		fp.calls++
@@ -34,7 +38,9 @@ func newFakeProvider(t *testing.T, script ...string) (*httptest.Server, *fakePro
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(fp.status)
 		idx := min(fp.calls-1, len(fp.script)-1)
-		_, _ = io.WriteString(w, fp.script[idx])
+		if _, werr := io.WriteString(w, fp.script[idx]); werr != nil {
+			fp.t.Errorf("write: %v", werr)
+		}
 	}))
 	t.Cleanup(srv.Close)
 	return srv, fp
@@ -43,12 +49,18 @@ func newFakeProvider(t *testing.T, script ...string) (*httptest.Server, *fakePro
 func (f *fakeProvider) callCount() int { f.mu.Lock(); defer f.mu.Unlock(); return f.calls }
 
 func openAIEnvelope(raw string) string {
-	b, _ := json.Marshal(raw)
+	b, merr := json.Marshal(raw)
+	if merr != nil {
+		panic(merr) // marshaling a string cannot fail
+	}
 	return `{"choices":[{"message":{"content":` + string(b) + `},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`
 }
 
 func anthropicEnvelope(raw string) string {
-	b, _ := json.Marshal(raw)
+	b, merr := json.Marshal(raw)
+	if merr != nil {
+		panic(merr) // marshaling a string cannot fail
+	}
 	return `{"content":[{"type":"text","text":` + string(b) + `}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`
 }
 
@@ -134,8 +146,11 @@ func TestTruncation(t *testing.T) {
 
 func TestSchemaErrorText(t *testing.T) {
 	sch := mustLoadSchema(t, "../testdata/extract/price.yaml")
-	raw, _ := os.ReadFile("../testdata/extract/invalid-doc.json")
-	err := sch.Validate(raw)
+	raw, err := os.ReadFile("../testdata/extract/invalid-doc.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = sch.Validate(raw)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -174,14 +189,18 @@ func TestCoerceEURDecimal(t *testing.T) {
 }
 
 func TestCoerceVectors(t *testing.T) {
-	if v, _ := extract.Coerce("int", "42"); v != 42 {
-		t.Errorf("int: %v", v)
-	}
-	if v, _ := extract.Coerce("trim", "  x  "); v != "x" {
-		t.Errorf("trim: %v", v)
-	}
-	if v, _ := extract.Coerce("bool", "ja"); v != true {
-		t.Errorf("bool: %v", v)
+	for _, tc := range []struct {
+		kind string
+		in   string
+		want any
+	}{{"int", "42", 42}, {"trim", "  x  ", "x"}, {"bool", "ja", true}} {
+		v, err := extract.Coerce(tc.kind, tc.in)
+		if err != nil {
+			t.Fatalf("Coerce(%s): %v", tc.kind, err)
+		}
+		if v != tc.want {
+			t.Errorf("Coerce(%s) = %v, want %v", tc.kind, v, tc.want)
+		}
 	}
 	if v, err := extract.Coerce("iso_date", "12.03.2024"); err != nil || v != "2024-03-12" {
 		t.Errorf("iso_date: %v %v", v, err)

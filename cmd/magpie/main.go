@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	"gomagpie/config"
+
+	"github.com/spf13/cobra"
 )
 
 var (

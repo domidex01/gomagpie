@@ -5,15 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
-	"time"
 
-	"github.com/spf13/cobra"
 	"gomagpie/clean"
 	"gomagpie/config"
 	"gomagpie/extract"
 	"gomagpie/fetch"
 	"gomagpie/store"
+
+	"github.com/spf13/cobra"
 )
 
 func newScrapeCmd() *cobra.Command {
@@ -79,14 +78,16 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }() //nolint:errcheck // end of command; close error unactionable
 
 	runID := uuidNew()
 	if err := db.BeginRun(runID, "scrape"); err != nil {
 		return err
 	}
 	finish := func(ok, er int, status string) {
-		_ = db.FinishRun(runID, ok, er, status)
+		if err := db.FinishRun(runID, ok, er, status); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: finish run: %v\n", err)
+		}
 	}
 
 	// --- fetch ---
@@ -112,7 +113,11 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 	// No schema → print markdown, no LLM.
 	if cfg.Schema == "" {
 		finish(1, 0, "finished")
-		return writeOut(cfg.Out, markdownDoc(cleaned, page))
+		mdoc, merr := markdownDoc(cleaned, page)
+		if merr != nil {
+			return merr
+		}
+		return writeOut(cfg.Out, mdoc)
 	}
 
 	// --- extract ---
@@ -134,37 +139,13 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		finish(0, 0, "error")
 		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
 	}
-	var ex extract.Extractor
-	switch strings.ToLower(provider) {
-	case "openai", "ollama":
-		a := extract.NewOpenAI("", key, model, sch)
-		a.Log = func(purpose string, u extract.TokenUsage) {
-			_ = db.LogLLMCall(runID, store.LLMCall{Provider: provider, Model: model, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, USDEstimate: u.USDEstimate, Purpose: purpose})
-		}
-		ex = a
-	default:
-		a := extract.NewAnthropic("", key, model, sch)
-		a.Log = func(purpose string, u extract.TokenUsage) {
-			_ = db.LogLLMCall(runID, store.LLMCall{Provider: provider, Model: model, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, USDEstimate: u.USDEstimate, Purpose: purpose})
-		}
-		ex = a
-	}
+	ex := newExtractor(provider, key, model, sch, db, runID)
 
 	// --max-cost pre-check: running total + projected next-call cost.
-	if cfg.MaxCost > 0 {
-		running, _ := db.RunCost(runID)
-		proj := extract.ProjectedCost(model, buildPromptPreview(cleaned, sch))
-		// When price is unknown (0), any positive ceiling with real content aborts:
-		// estimate prompt tokens × a reference floor so a near-zero ceiling trips.
-		if proj == 0 {
-			if toks := extract.EstimatePromptTokens(cleaned.Markdown); toks > 0 {
-				proj = float64(toks) / 1e6 * 2.00 // reference input price floor
-			}
-		}
-		if running+proj > cfg.MaxCost {
-			finish(0, 0, "error")
-			return fail(6, "cost ceiling exceeded: running %.6f + projected %.6f > max %.6f", running, proj, cfg.MaxCost)
-		}
+	promptText := "Extract structured data.\n" + string(cleaned.StructuredData) + "\n" + cleaned.Markdown
+	if err := checkCostCeiling(db, runID, model, promptText, cfg.MaxCost); err != nil {
+		finish(0, 0, "error")
+		return err
 	}
 
 	res, err := ex.Extract(ctx, extract.ExtractInput{
@@ -175,7 +156,11 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		return err
 	}
 	finish(1, 0, "finished")
-	return writeOut(cfg.Out, extractedDoc(cleaned, page, res))
+	edoc, merr := extractedDoc(cleaned, page, res)
+	if merr != nil {
+		return merr
+	}
+	return writeOut(cfg.Out, edoc)
 }
 
 func applyScrapeFlags(cfg *config.Config, o scrapeOptions) {
@@ -206,14 +191,7 @@ func applyScrapeFlags(cfg *config.Config, o scrapeOptions) {
 
 func fetchURL(ctx context.Context, static *fetch.StaticFetcher, rawURL, render string) (*fetch.FetchResponse, bool, error) {
 	if render == "browser" {
-		rod := fetch.NewRodFetcher()
-		defer rod.Close()
-		fmt.Fprintln(os.Stderr, "fetch: using browser renderer")
-		resp, err := rod.Fetch(ctx, fetch.FetchRequest{URL: rawURL})
-		if err != nil {
-			return nil, true, err
-		}
-		return resp, true, nil
+		return fetchBrowser(ctx, rawURL, "fetch: using browser renderer")
 	}
 	resp, err := static.Fetch(ctx, fetch.FetchRequest{URL: rawURL})
 	if err != nil {
@@ -226,47 +204,29 @@ func fetchURL(ctx context.Context, static *fetch.StaticFetcher, rawURL, render s
 		return resp, false, nil
 	}
 	score, embedded := fetch.ScoreJSRequired(resp.HTML, resp.Headers)
-	if embedded {
+	if embedded || !fetch.NeedsBrowser(score) {
 		return resp, false, nil
 	}
-	if !fetch.NeedsBrowser(score) {
-		return resp, false, nil
-	}
-	rod := fetch.NewRodFetcher()
-	defer rod.Close()
-	fmt.Fprintln(os.Stderr, "fetch: escalating to browser renderer")
-	rresp, err := rod.Fetch(ctx, fetch.FetchRequest{URL: rawURL})
-	if err != nil {
-		return nil, true, err
-	}
-	return rresp, true, nil
+	return fetchBrowser(ctx, rawURL, "fetch: escalating to browser renderer")
 }
 
-func buildPromptPreview(cleaned clean.CleanedPage, sch *extract.Schema) string {
-	return "Extract structured data.\n" + string(cleaned.StructuredData) + "\n" + cleaned.Markdown
+func markdownDoc(c clean.CleanedPage, page *fetch.FetchResponse) (string, error) {
+	return marshalOut(markdownOut{
+		URL: page.URL, FinalURL: c.FinalURL, Title: c.Title,
+		Markdown: c.Markdown, StructuredData: orEmpty(c.StructuredData),
+	}, "scrape")
 }
 
-func markdownDoc(c clean.CleanedPage, page *fetch.FetchResponse) string {
-	doc := map[string]any{
-		"url": page.URL, "final_url": c.FinalURL, "title": c.Title,
-		"markdown": c.Markdown, "structured_data": json.RawMessage(orEmpty(c.StructuredData)),
-	}
-	b, _ := json.MarshalIndent(doc, "", "  ")
-	return string(b)
-}
-
-func extractedDoc(c clean.CleanedPage, page *fetch.FetchResponse, res extract.ExtractResult) string {
-	doc := map[string]any{
-		"url": page.URL, "final_url": c.FinalURL, "title": c.Title,
-		"extracted": res.Record,
-		"usage": map[string]any{
-			"provider": res.Provider, "model": res.Model,
-			"prompt_tokens": res.Usage.PromptTokens, "completion_tokens": res.Usage.CompletionTokens,
-			"usd_estimate": res.Usage.USDEstimate, "attempts": res.Attempts,
+func extractedDoc(c clean.CleanedPage, page *fetch.FetchResponse, res extract.ExtractResult) (string, error) {
+	return marshalOut(extractedOut{
+		URL: page.URL, FinalURL: c.FinalURL, Title: c.Title,
+		Extracted: res.Record,
+		Usage: usageOut{
+			Provider: res.Provider, Model: res.Model,
+			PromptTokens: res.Usage.PromptTokens, CompletionTokens: res.Usage.CompletionTokens,
+			USDEstimate: res.Usage.USDEstimate, Attempts: res.Attempts,
 		},
-	}
-	b, _ := json.MarshalIndent(doc, "", "  ")
-	return string(b)
+	}, "scrape")
 }
 
 func orEmpty(r json.RawMessage) json.RawMessage {
@@ -274,24 +234,4 @@ func orEmpty(r json.RawMessage) json.RawMessage {
 		return json.RawMessage("null")
 	}
 	return r
-}
-
-func writeOut(path, s string) error {
-	if path == "" {
-		fmt.Println(s)
-		return nil
-	}
-	if err := os.WriteFile(path, []byte(s), 0o644); err != nil {
-		return fmt.Errorf("write out: %w", err)
-	}
-	return nil
-}
-
-func isFreeProvider(p string) bool {
-	return strings.ToLower(p) == "ollama"
-}
-
-func uuidNew() string {
-	// Avoid a uuid dep: timestamp + pid is unique enough for run ids.
-	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), os.Getpid())
 }

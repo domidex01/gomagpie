@@ -29,10 +29,12 @@ func TestStaticRedirectCap(t *testing.T) {
 			n = 0
 		}
 		if n < 11 {
-			http.Redirect(w, r, fmt.Sprintf("/%d", n+1), http.StatusFound)
+			http.Redirect(w, r, fmt.Sprintf("/%d", n+1), http.StatusFound) // writes header, no body to check
 			return
 		}
-		fmt.Fprint(w, "done")
+		if _, err := fmt.Fprint(w, "done"); err != nil {
+			t.Error(err)
+		}
 	})
 	base := newFakeOrigin(t, mux)
 	f, err := fetch.NewStaticFetcher()
@@ -53,11 +55,18 @@ func TestStaticGzip(t *testing.T) {
 	mux.HandleFunc("/gzip", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Encoding", "gzip")
 		gz := gzip.NewWriter(w)
-		_, _ = gz.Write([]byte("<html><body><p>" + strings.Repeat("hello world ", 100) + "</p></body></html>"))
-		_ = gz.Close()
+		if _, err := gz.Write([]byte("<html><body><p>" + strings.Repeat("hello world ", 100) + "</p></body></html>")); err != nil {
+			t.Error(err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Error(err)
+		}
 	})
 	base := newFakeOrigin(t, mux)
-	f, _ := fetch.NewStaticFetcher()
+	f, ferr := fetch.NewStaticFetcher()
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
 	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: base + "/gzip"})
 	if err != nil {
 		t.Fatal(err)
@@ -71,10 +80,15 @@ func TestStatic429Passthrough(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/limited", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(429)
-		fmt.Fprint(w, "slow down")
+		if _, err := fmt.Fprint(w, "slow down"); err != nil {
+			t.Error(err)
+		}
 	})
 	base := newFakeOrigin(t, mux)
-	f, _ := fetch.NewStaticFetcher()
+	f, ferr := fetch.NewStaticFetcher()
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
 	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: base + "/limited"})
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +108,10 @@ func TestStaticFileURL(t *testing.T) {
 	if err := os.WriteFile(p, []byte(want), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f, _ := fetch.NewStaticFetcher()
+	f, ferr := fetch.NewStaticFetcher()
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
 	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: "file://" + p})
 	if err != nil {
 		t.Fatal(err)

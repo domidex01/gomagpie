@@ -5,8 +5,9 @@ package fetch_test
 import (
 	"testing"
 
-	"github.com/go-rod/rod/lib/launcher"
 	"gomagpie/fetch"
+
+	"github.com/go-rod/rod/lib/launcher"
 )
 
 func TestRodSmoke(t *testing.T) {

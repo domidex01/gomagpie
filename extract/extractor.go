@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 )
 
@@ -125,7 +124,24 @@ func isTruncation(err error) bool {
 	return ok
 }
 
-func postJSON(ctx context.Context, url, apiKey string, headers map[string]string, body any) ([]byte, error) {
+// schemaDoc round-trips a schema through JSON so providers get a plain
+// map without yaml-node types.
+func schemaDoc(raw any) (any, error) {
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("extract: marshal schema: %w", err)
+	}
+	var doc any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, fmt.Errorf("extract: decode schema: %w", err)
+	}
+	return doc, nil
+}
+
+// httpClient is shared: one LLM call at a time per run, no per-call setup.
+var httpClient = &http.Client{Timeout: 120 * time.Second}
+
+func postJSON(ctx context.Context, url string, headers map[string]string, body any) ([]byte, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -138,17 +154,11 @@ func postJSON(ctx context.Context, url, apiKey string, headers map[string]string
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	_ = apiKey
-	client := &http.Client{Timeout: 120 * time.Second}
-	// Test hook: allow logging via env only; no test hooks in production paths beyond env config.
-	if os.Getenv("GOMAGPIE_HTTP_DEBUG") != "" {
-		fmt.Fprintln(os.Stderr, "POST", url)
-	}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // body fully read above; close error unactionable
 	out, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
 	if err != nil {
 		return nil, err
