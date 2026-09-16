@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"encoding/json"
@@ -109,7 +109,7 @@ func fakeLLM(t *testing.T, doc string) *fakeProvider {
 
 func priceSchema(t *testing.T) string {
 	t.Helper()
-	abs, err := filepath.Abs("../../testdata/extract/price.yaml")
+	abs, err := filepath.Abs("../testdata/extract/price.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

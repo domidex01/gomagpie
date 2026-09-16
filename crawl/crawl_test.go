@@ -629,3 +629,80 @@ func TestCrawl_RobotsBlocked(t *testing.T) {
 		t.Errorf("page fetches = %d, want 0", n)
 	}
 }
+
+func TestHooks_ProgressAndOnRecord(t *testing.T) {
+	links := []string{"/0", "/1", "/2", "/3", "/4"}
+	pages := map[string]string{}
+	for _, p := range links {
+		pages[p] = itemPage(links...)
+	}
+	o := newSiteOrigin(t, pages, "")
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+	var mu sync.Mutex
+	var progressCalls int
+	var records []map[string]any
+	res, err := Run(context.Background(), Options{
+		SeedURL: o.srv.URL + "/0", Schema: mustTestSchema(t),
+		MaxPages: 5, MaxDepth: 10, SameHost: true,
+		FetchWorkers: 4, Rate: 1000, Format: "jsonl", Out: filepath.Join(t.TempDir(), "r.jsonl"),
+		DB: db, Extractor: fx,
+		Progress: func(done int) {
+			mu.Lock()
+			defer mu.Unlock()
+			progressCalls++
+		},
+		OnRecord: func(r map[string]any) {
+			mu.Lock()
+			defer mu.Unlock()
+			records = append(records, r)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if progressCalls != res.PagesOK+res.PagesErr {
+		t.Errorf("progress calls = %d, want done+errored = %d", progressCalls, res.PagesOK+res.PagesErr)
+	}
+	if len(records) != res.PagesOK {
+		t.Errorf("onRecord records = %d, want pages_ok = %d", len(records), res.PagesOK)
+	}
+}
+
+func TestHooks_NilSafe(t *testing.T) {
+	links := []string{"/0", "/1"}
+	mkPages := func() map[string]string {
+		pages := map[string]string{}
+		for _, p := range links {
+			pages[p] = itemPage(links...)
+		}
+		return pages
+	}
+	run := func(t *testing.T, hooks bool) Result {
+		o := newSiteOrigin(t, mkPages(), "")
+		db := openCrawlDB(t)
+		fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+		opts := Options{
+			SeedURL: o.srv.URL + "/0", Schema: mustTestSchema(t),
+			MaxPages: 10, MaxDepth: 10, SameHost: true,
+			FetchWorkers: 4, Rate: 1000, Format: "jsonl", Out: filepath.Join(t.TempDir(), "r.jsonl"),
+			DB: db, Extractor: fx,
+		}
+		if hooks {
+			opts.Progress = func(int) {}
+			opts.OnRecord = func(map[string]any) {}
+		}
+		res, err := Run(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		return res
+	}
+	withHooks := run(t, true)
+	withoutHooks := run(t, false)
+	if withHooks.PagesOK != withoutHooks.PagesOK || withHooks.PagesErr != withoutHooks.PagesErr {
+		t.Errorf("hooked %+v != nil-hook %+v (hooks must not change results)", withHooks, withoutHooks)
+	}
+}

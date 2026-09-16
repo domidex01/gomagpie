@@ -106,3 +106,69 @@ func TestShowRedacts(t *testing.T) {
 		}
 	}
 }
+
+func TestServeKeys_OverlayChain(t *testing.T) {
+	dir := isolatedXDG(t)
+	cfgPath := filepath.Join(dir, "gomagpie", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Defaults.
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ServeTransport != "stdio" {
+		t.Errorf("default serve_transport = %q, want stdio", cfg.ServeTransport)
+	}
+	if cfg.ExporterCmd != "" {
+		t.Errorf("default exporter_cmd = %q, want empty", cfg.ExporterCmd)
+	}
+	// File sets serve_addr.
+	if err := os.WriteFile(cfgPath, []byte("serve_addr: 127.0.0.1:9999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ServeAddr != "127.0.0.1:9999" {
+		t.Errorf("file serve_addr = %q, want 127.0.0.1:9999", cfg.ServeAddr)
+	}
+	// Env beats file.
+	t.Setenv("GOMAGPIE_SERVE_TRANSPORT", "http")
+	t.Setenv("GOMAGPIE_EXPORTER_CMD", "myprog --fast")
+	cfg, err = config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ServeTransport != "http" {
+		t.Errorf("env serve_transport = %q, want http", cfg.ServeTransport)
+	}
+	if cfg.ExporterCmd != "myprog --fast" {
+		t.Errorf("env exporter_cmd = %q", cfg.ExporterCmd)
+	}
+	// Flags beat env.
+	cfg.ApplyFlags(config.Flags{
+		ServeTransport: "stdio", ServeTransportChanged: true,
+		ServeAddr: "127.0.0.1:1111", ServeAddrChanged: true,
+		ExporterCmd: "other", ExporterCmdChanged: true,
+	})
+	if cfg.ServeTransport != "stdio" || cfg.ServeAddr != "127.0.0.1:1111" || cfg.ExporterCmd != "other" {
+		t.Errorf("flag overlay = %+v, want stdio/127.0.0.1:1111/other", cfg)
+	}
+}
+
+func TestConfigShow_HasPhase3Keys(t *testing.T) {
+	isolatedXDG(t)
+	cfg, err := config.Load(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "gomagpie", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	red := cfg.Redacted()
+	for _, k := range []string{"serve_transport", "serve_addr", "exporter_cmd"} {
+		if _, ok := red[k]; !ok {
+			t.Errorf("Redacted() missing %q", k)
+		}
+	}
+}

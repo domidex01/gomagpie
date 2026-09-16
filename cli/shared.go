@@ -1,7 +1,6 @@
-package main
+package cli
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -10,7 +9,6 @@ import (
 	"time"
 
 	"gomagpie/extract"
-	"gomagpie/fetch"
 	"gomagpie/store"
 )
 
@@ -115,19 +113,6 @@ func checkCostCeiling(db *store.DB, runID, provider, model, promptText string, m
 		return fail(6, "cost ceiling exceeded: running %.6f + projected %.6f > max %.6f", running, proj, maxCost)
 	}
 	return nil
-}
-
-// fetchBrowser runs one browser fetch with a log line. Single home for the
-// rod lifecycle so the render=browser and auto-escalation paths match.
-func fetchBrowser(ctx context.Context, rawURL, msg string) (*fetch.FetchResponse, bool, error) {
-	rod := fetch.NewRodFetcher()
-	defer func() { _ = rod.Close() }() //nolint:errcheck // browser teardown; failure unactionable
-	fmt.Fprintln(os.Stderr, msg)
-	resp, err := rod.Fetch(ctx, fetch.FetchRequest{URL: rawURL})
-	if err != nil {
-		return nil, true, err
-	}
-	return resp, true, nil
 }
 
 type markdownOut struct {

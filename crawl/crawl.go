@@ -45,6 +45,13 @@ type Options struct {
 	Model        string
 	MaxCost      float64
 	DB           *store.DB
+	// Progress is called once per done/errored page from the sink goroutine
+	// (nil = off). Total is intentionally omitted: the frontier total is
+	// unknowable upfront.
+	Progress func(done int)
+	// OnRecord receives each extracted record at the sink (nil = off).
+	// The MCP crawl_site handler captures records through it.
+	OnRecord func(map[string]any)
 	// Extractor serves per-page LLM (cold start + non-cacheable + heal).
 	Extractor extract.Extractor
 	// Propose is the LLM-proposal step inside synthesis (nil = free paths only).
@@ -456,6 +463,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	var sinkErr error
+	doneCount := 0
 	sink := func(r core.PageResult) {
 		if sinkErr != nil {
 			return
@@ -473,9 +481,15 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 				}
 			} else if merr := db.MarkDone(runID, hashTask(r.Task)); merr != nil {
 				fmt.Fprintf(os.Stderr, "warning: mark done: %v\n", merr)
+			} else if opts.OnRecord != nil {
+				opts.OnRecord(jsonRecord(r))
 			}
 		}
 		outstanding.Add(-1)
+		doneCount++
+		if opts.Progress != nil {
+			opts.Progress(doneCount)
+		}
 	}
 
 	cfg := core.DefaultPipelineConfig()

@@ -48,6 +48,9 @@ Zen `/responses`-only models are unsupported (different API shape).
 | :-- | :-- |
 | `magpie scrape <url> [--schema f] [--render auto\|static\|browser] [--provider …] [--model …] [--format json\|jsonl] [--max-cost usd] [--out f]` | Fetch → clean → extract one URL |
 | `magpie extract [--schema f] [--content-type html\|markdown]` | Extract from stdin/file, no fetch |
+| `magpie crawl <url> --schema f [--exporter-cmd prog]` | BFS crawl + extract; tee records as JSONL to prog's stdin |
+| `magpie serve [--transport stdio\|http] [--addr :8080]` | Serve the pipeline over MCP |
+| `magpie build --with module@version --output f` | Compile a custom static binary with extra modules |
 | `magpie config set-key <provider> \| show` | Store key in OS keyring / show redacted config |
 
 Exit codes: 0 ok · 1 runtime · 2 usage · 3 all-failed · 6 cost ceiling · 7 credentials.
@@ -65,3 +68,47 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...  # + linux/amd64, darwin/
 ## Layout
 
 `cmd/magpie/` CLI · `fetch/` static + detect + rod (rod lives only here) · `clean/` trafilatura→markdown · `extract/` schema + providers + repair loop + coerce + cost · `config/` file/env/flag/keyring · `store/` SQLite · `testdata/` goldens · `plan/` phase plans. Source of truth: `spec.md`; conventions: `AGENTS.md`.
+
+## MCP server
+
+`magpie serve` exposes the pipeline to agents over the Model Context
+Protocol: stdio for local clients, stateless Streamable HTTP for remote
+ones. `crawl_site` runs synchronously to completion (no background jobs),
+returns a `run_id`, and re-invoking it with that `run_id` reports stored
+status without touching the extractor.
+
+Claude Desktop config (`{ "mcpServers": { "gomagpie": {
+"command": "magpie", "args": ["serve"] } } }`):
+
+| Tool | Action |
+| :-- | :-- |
+| `scrape_url` | Fetch → clean → extract one URL (schema optional) |
+| `crawl_site` | Crawl a site, or poll a previous run via `run_id` (with progress) |
+| `extract_structured` | Extract from HTML/markdown, no fetch |
+| `get_cached_selectors` | List cached selectors for a domain |
+
+HTTP mode: `magpie serve --transport http --addr 127.0.0.1:8089`.
+Details: `magpie serve --help`.
+
+## Custom builds
+
+Compile-time modules register via `core.RegisterModule` in `init()` and
+ship inside custom static binaries:
+
+```bash
+magpie build --with example.com/rodfetcher@v1.2.0 --output magpie-custom
+```
+
+`--with` must be `module@version` (bare paths are rejected — they would
+silently resolve to `latest`). Remote modules need network; the build is
+otherwise hermetic.
+
+## WASM plugins
+
+Untrusted `.wasm` transforms run in a wazero sandbox: exactly four host
+functions (`gomagpie_log`, `gomagpie_get_input`, `gomagpie_set_output`,
+`gomagpie_config_get`), WASI with zero preopened dirs (no filesystem,
+sockets, or env), version-gated against `core.CoreAPIVersion`. Guests
+export `gomagpie_api_version` and `run`. Full ABI contract:
+`plugin/wasm/host.go`. TinyGo and Rust guests work (both import
+`wasi_snapshot_preview1`, which is linked but capability-free).

@@ -173,6 +173,32 @@ func (d *DB) LogLLMCall(runID string, c LLMCall) error {
 	return nil
 }
 
+// RunInfo is the stored status row for a run (run_id polling).
+type RunInfo struct {
+	RunID            string
+	Command          string
+	Status           string
+	PagesOK          int
+	PagesErr         int
+	PromptTokens     int
+	CompletionTokens int
+	USDEstimate      float64
+}
+
+// GetRun reads a run_history status row; unknown ids error loudly.
+func (d *DB) GetRun(runID string) (RunInfo, error) {
+	var r RunInfo
+	err := d.db.QueryRow(`SELECT run_id, command, status, pages_ok, pages_err, prompt_tokens, completion_tokens, usd_estimate FROM run_history WHERE run_id=?`, runID).Scan(
+		&r.RunID, &r.Command, &r.Status, &r.PagesOK, &r.PagesErr, &r.PromptTokens, &r.CompletionTokens, &r.USDEstimate)
+	if err == sql.ErrNoRows {
+		return RunInfo{}, fmt.Errorf("store: unknown run_id %q", runID)
+	}
+	if err != nil {
+		return RunInfo{}, fmt.Errorf("store: get run: %w", err)
+	}
+	return r, nil
+}
+
 // RunCost returns the accumulated usd_estimate for a run.
 func (d *DB) RunCost(runID string) (float64, error) {
 	var v float64

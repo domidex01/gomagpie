@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"encoding/json"
@@ -153,7 +153,7 @@ func codeOf(err error) int {
 
 func TestScrapeNoSchema(t *testing.T) {
 	dbPath := testEnv(t, "cache.db")
-	abs := mustAbs(t, "../../testdata/clean/article.html")
+	abs := mustAbs(t, "../testdata/clean/article.html")
 	out := filepath.Join(t.TempDir(), "out.json")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{Format: "json", Out: out, Render: "static"})
 	if err != nil {
@@ -179,8 +179,8 @@ func TestScrapeEndToEndFileURL(t *testing.T) {
 	srv, fp := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
 	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
 	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
-	abs := mustAbs(t, "../../testdata/clean/article.html")
-	schema := mustAbs(t, "../../testdata/extract/price.yaml")
+	abs := mustAbs(t, "../testdata/clean/article.html")
+	schema := mustAbs(t, "../testdata/extract/price.yaml")
 	out := filepath.Join(t.TempDir(), "out.json")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{
 		Schema: schema, Format: "json", Out: out, Render: "static",
@@ -211,7 +211,7 @@ func TestScrapeEndToEndFileURL(t *testing.T) {
 
 func TestScrapeRenderStaticSPAShell(t *testing.T) {
 	testEnv(t, "cache.db")
-	abs := mustAbs(t, "../../testdata/clean/spa-shell.html")
+	abs := mustAbs(t, "../testdata/clean/spa-shell.html")
 	out := filepath.Join(t.TempDir(), "out.json")
 	// Static render must never touch the browser (no Chrome here).
 	if err := runScrape(t.Context(), "file://"+abs, scrapeOptions{Format: "json", Out: out, Render: "static"}); err != nil {
@@ -221,7 +221,7 @@ func TestScrapeRenderStaticSPAShell(t *testing.T) {
 
 func TestScrapeBadFormat(t *testing.T) {
 	testEnv(t, "cache.db")
-	abs := mustAbs(t, "../../testdata/clean/article.html")
+	abs := mustAbs(t, "../testdata/clean/article.html")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{Format: "csv", Render: "static"})
 	if codeOf(err) == 0 {
 		t.Fatal("expected non-zero exit for csv")
@@ -237,8 +237,8 @@ func TestMaxCostAbortsBeforeCall(t *testing.T) {
 	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
 	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
 	t.Setenv("GOMAGPIE_MAX_COST", "0.000001")
-	abs := mustAbs(t, "../../testdata/clean/article.html")
-	schema := mustAbs(t, "../../testdata/extract/price.yaml")
+	abs := mustAbs(t, "../testdata/clean/article.html")
+	schema := mustAbs(t, "../testdata/extract/price.yaml")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{
 		Schema: schema, Render: "static", Provider: "openai", Model: "gpt-4o-mini",
 	})
@@ -255,8 +255,8 @@ func TestMissingKeyExit7(t *testing.T) {
 	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "")
 	t.Setenv("GOMAGPIE_ANTHROPIC_API_KEY", "")
 	t.Setenv("GOMAGPIE_API_KEY", "")
-	abs := mustAbs(t, "../../testdata/clean/article.html")
-	schema := mustAbs(t, "../../testdata/extract/price.yaml")
+	abs := mustAbs(t, "../testdata/clean/article.html")
+	schema := mustAbs(t, "../testdata/extract/price.yaml")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{
 		Schema: schema, Render: "static", Provider: "openai", Model: "gpt-4o-mini",
 	})
@@ -273,13 +273,13 @@ func TestExtractCmdStdinHTML(t *testing.T) {
 	srv, _ := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
 	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
 	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
-	html := mustRead(t, "../../testdata/clean/article.html")
+	html := mustRead(t, "../testdata/clean/article.html")
 	// Simulate stdin via temp file (no fetch involved).
 	in := filepath.Join(t.TempDir(), "in.html")
 	if err := os.WriteFile(in, html, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	schema := mustAbs(t, "../../testdata/extract/price.yaml")
+	schema := mustAbs(t, "../testdata/extract/price.yaml")
 	out := filepath.Join(t.TempDir(), "out.json")
 	err := runExtract(t.Context(), extractOptions{
 		Schema: schema, ContentType: "html", Provider: "openai",
