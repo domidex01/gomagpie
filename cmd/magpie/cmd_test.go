@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gomagpie/config"
 )
 
 func resetGlobals() {
@@ -492,5 +494,244 @@ func TestCacheCmd_HealSuccess(t *testing.T) {
 	})
 	if !strings.Contains(stderr, "healed "+host) {
 		t.Errorf("heal stderr = %q, want healed note", stderr)
+	}
+}
+
+// ---- LLM providers (codex exec + openrouter + opencode go/zen) ----
+
+// stubCodexCmdScript is a minimal canned `codex`: preflight answers plus
+// one valid record via the -o file (mirrors the extract-package stub).
+const stubCodexCmdScript = `#!/bin/sh
+LOG="$CALL_LOG"
+echo "argv: $*" >> "$LOG"
+cat >> "$LOG"
+if [ "$1" = "--help" ]; then
+  echo "Usage: codex exec [...] --output-schema <file> --json [...]"
+  exit 0
+fi
+if [ "$1" = "--version" ]; then
+  echo "codex 1.2.3"
+  exit 0
+fi
+out=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  prev="$a"
+done
+echo '{"type":"thread.started","thread_id":"t"}'
+echo '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}'
+echo '{"name":"Widget","price":12.99}' > "$out"
+exit 0
+`
+
+func stubCodexCmd(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(stubCodexCmdScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CALL_LOG", filepath.Join(dir, "calls.log"))
+}
+
+func scrapeOne(t *testing.T, provider, model string) error {
+	t.Helper()
+	seed := writeFileSite(t, 1)
+	out := filepath.Join(t.TempDir(), "s.json")
+	return runScrape(t.Context(), seed, scrapeOptions{
+		Schema: priceSchema(t), Format: "json", Out: out, Render: "static",
+		Provider: provider, Model: model,
+	})
+}
+
+func TestProvider_UnknownErrors(t *testing.T) {
+	testEnv(t, "cache.db")
+	t.Setenv("GOMAGPIE_WAT_API_KEY", "x") // reach the switch past the key check
+	err := scrapeOne(t, "wat", "m")
+	if err == nil || !strings.Contains(err.Error(), "wat") {
+		t.Fatalf("expected error naming the provider, got %v (silent default bills Anthropic)", err)
+	}
+	if codeOf(err) != 2 {
+		t.Errorf("exit = %d, want 2", codeOf(err))
+	}
+}
+
+func TestProvider_CodexNeedsNoKey(t *testing.T) {
+	testEnv(t, "cache.db")
+	stubCodexCmd(t)
+	t.Setenv("GOMAGPIE_API_KEY", "")
+	t.Setenv("GOMAGPIE_CODEX_API_KEY", "")
+	if err := scrapeOne(t, "codex", "gpt-5.2"); err != nil {
+		t.Fatalf("codex without key: %v (want keyless preflight+extract)", err)
+	}
+}
+
+func TestProvider_OllamaNeedsNoKey(t *testing.T) {
+	testEnv(t, "cache.db")
+	srv, _ := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
+	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
+	if err := scrapeOne(t, "ollama", "llama3.1"); err != nil {
+		t.Fatalf("ollama without key: %v", err)
+	}
+}
+
+func TestProvider_OpenRouterNeedsKey(t *testing.T) {
+	testEnv(t, "cache.db")
+	t.Setenv("GOMAGPIE_API_KEY", "")
+	t.Setenv("GOMAGPIE_OPENROUTER_API_KEY", "")
+	if err := scrapeOne(t, "openrouter", "openai/gpt-4o-mini"); codeOf(err) != 7 {
+		t.Fatalf("exit = %d, want 7 (err=%v)", codeOf(err), err)
+	}
+}
+
+func TestProvider_DefaultModels(t *testing.T) {
+	for _, tc := range []struct{ provider, want string }{
+		{"anthropic", "claude-sonnet-5"},
+		{"openai", "gpt-4o-mini"},
+		{"ollama", "llama3.1"},
+		{"openrouter", "openai/gpt-4o-mini"},
+		{"codex", "gpt-5.2"},
+		{"opencode-go", "glm-5.3"},
+		{"opencode-zen", "claude-sonnet-4-6"},
+	} {
+		if got := config.DefaultModel(tc.provider); got != tc.want {
+			t.Errorf("DefaultModel(%q) = %q, want %q", tc.provider, got, tc.want)
+		}
+	}
+}
+
+func TestSetKey_DashMessage(t *testing.T) {
+	if err := config.SetKey("opencode-go", "bogus"); err != nil {
+		if !strings.Contains(err.Error(), "GOMAGPIE_OPENCODE_GO_API_KEY") {
+			t.Errorf("SetKey error = %q, want dash-to-underscore env name", err.Error())
+		}
+	}
+	// Read path uses the same transform (white-box: env name is the contract).
+	t.Setenv("GOMAGPIE_OPENCODE_GO_API_KEY", "k")
+	if got := (config.Config{}).APIKey("opencode-go"); got != "k" {
+		t.Errorf("APIKey(opencode-go) = %q, want env hit (dash→underscore)", got)
+	}
+}
+
+func TestMaxCost_FlatRateExempt(t *testing.T) {
+	// opencode-go leg: flat plan proceeds despite a near-zero ceiling.
+	testEnv(t, "cache.db")
+	srv, fp := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
+	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
+	t.Setenv("GOMAGPIE_OPENCODE_GO_API_KEY", "k")
+	t.Setenv("GOMAGPIE_MAX_COST", "0.000001")
+	if err := scrapeOne(t, "opencode-go", "glm-5.3"); err != nil {
+		t.Fatalf("opencode-go with tiny ceiling: %v (want exemption)", err)
+	}
+	if fp.callCount() < 1 {
+		t.Error("opencode-go provider hits = 0, want ≥1 (exempt path proceeds)")
+	}
+	// codex leg: subscription spend proceeds too, keyless.
+	testEnv(t, "cache.db")
+	stubCodexCmd(t)
+	t.Setenv("GOMAGPIE_MAX_COST", "0.000001")
+	t.Setenv("GOMAGPIE_API_KEY", "")
+	if err := scrapeOne(t, "codex", "gpt-5.2"); err != nil {
+		t.Fatalf("codex with tiny ceiling: %v (want exemption)", err)
+	}
+	// metered control: openai aborts pre-call with 0 hits.
+	testEnv(t, "cache.db")
+	srv2, fp2 := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
+	t.Setenv("GOMAGPIE_BASE_URL", srv2.URL)
+	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "k")
+	t.Setenv("GOMAGPIE_MAX_COST", "0.000001")
+	err := scrapeOne(t, "openai", "gpt-4o-mini")
+	if codeOf(err) != 6 {
+		t.Fatalf("exit = %d, want 6 (err=%v)", codeOf(err), err)
+	}
+	if fp2.callCount() != 0 {
+		t.Errorf("metered provider calls = %d, want 0 (aborted pre-call)", fp2.callCount())
+	}
+}
+
+func TestOpenRouter_CostRow(t *testing.T) {
+	dbPath := testEnv(t, "cache.db")
+	srv, _ := newFakeProvider(t, openAIEnvelopeCost(`{"name":"Widget","price":12.99}`, 0.0042))
+	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
+	t.Setenv("GOMAGPIE_OPENROUTER_API_KEY", "test-key")
+	if err := scrapeOne(t, "openrouter", "anthropic/claude-sonnet-4-6"); err != nil {
+		t.Fatalf("scrape: %v", err)
+	}
+	db := mustOpenDB(t, dbPath)
+	calls, err := db.LLMCalls("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range calls {
+		if c.Provider == "openrouter" {
+			found = true
+			if c.USDEstimate != 0.0042 {
+				t.Errorf("usd_estimate = %v, want 0.0042 from usage.cost", c.USDEstimate)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no openrouter row in llm_calls (%d rows)", len(calls))
+	}
+}
+
+func TestZen_SessionHeaders(t *testing.T) {
+	// chat/completions leg on the Go base.
+	testEnv(t, "cache.db")
+	srv, fp := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
+	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
+	t.Setenv("GOMAGPIE_OPENCODE_GO_API_KEY", "k")
+	if err := scrapeOne(t, "opencode-go", "glm-5.3"); err != nil {
+		t.Fatalf("go chat leg: %v", err)
+	}
+	if got := fp.lastHeader("x-opencode-session"); got == "" {
+		t.Error("go leg missing x-opencode-session header")
+	}
+	if !strings.Contains(fp.lastHeader("User-Agent"), "magpie") {
+		t.Errorf("go leg UA = %q, want magpie", fp.lastHeader("User-Agent"))
+	}
+	// /messages leg on the Zen base (fresh DB: file-domain cache is per-DB).
+	testEnv(t, "cache.db")
+	srv2, fp2 := newFakeProvider(t, anthropicEnvelope(`{"name":"Widget","price":12.99}`))
+	t.Setenv("GOMAGPIE_BASE_URL", srv2.URL)
+	t.Setenv("GOMAGPIE_OPENCODE_ZEN_API_KEY", "k")
+	if err := scrapeOne(t, "opencode-zen", "claude-sonnet-4-6"); err != nil {
+		t.Fatalf("zen messages leg: %v", err)
+	}
+	if got := fp2.lastHeader("x-opencode-session"); got == "" {
+		t.Error("zen leg missing x-opencode-session header")
+	}
+	if !strings.Contains(fp2.lastHeader("User-Agent"), "magpie") {
+		t.Errorf("zen leg UA = %q, want magpie", fp2.lastHeader("User-Agent"))
+	}
+}
+
+func TestProviderHelp_ListsAll(t *testing.T) {
+	resetGlobals()
+	ids := []string{"anthropic", "openai", "ollama", "openrouter", "codex", "opencode-go", "opencode-zen"}
+	root := rootCmd()
+	usages := map[string]string{}
+	for _, c := range root.Commands() {
+		if f := c.Flags().Lookup("provider"); f != nil {
+			usages[c.Name()] = f.Usage
+		}
+		for _, sub := range c.Commands() {
+			if f := sub.Flags().Lookup("provider"); f != nil {
+				usages[c.Name()+" "+sub.Name()] = f.Usage
+			}
+		}
+	}
+	for _, cmd := range []string{"scrape", "crawl", "extract", "cache heal"} {
+		u, ok := usages[cmd]
+		if !ok {
+			t.Fatalf("no --provider flag found on %s (have %v)", cmd, usages)
+		}
+		for _, id := range ids {
+			if !strings.Contains(u, id) {
+				t.Errorf("%s --provider help missing %q (got %q)", cmd, id, u)
+			}
+		}
 	}
 }

@@ -27,7 +27,7 @@ func newExtractCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&schema, "schema", "", "JSON Schema file (yaml/json)")
 	cmd.Flags().StringVar(&contentType, "content-type", "html", "html|markdown")
-	cmd.Flags().StringVar(&provider, "provider", "", "anthropic|openai|ollama")
+	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp)
 	cmd.Flags().StringVar(&model, "model", "", "model name")
 	cmd.Flags().StringVar(&out, "out", "", "output path (default stdout)")
 	return cmd
@@ -103,7 +103,7 @@ func runExtract(ctx context.Context, o extractOptions) error {
 		model = "claude-sonnet-5"
 	}
 	key := cfg.APIKey(provider)
-	if key == "" && !isFreeProvider(provider) {
+	if key == "" && needsAPIKey(provider) {
 		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
 	}
 
@@ -117,9 +117,12 @@ func runExtract(ctx context.Context, o extractOptions) error {
 		return err
 	}
 
-	ex := newExtractor(provider, key, model, sch, db, runID)
+	ex, err := newExtractor(provider, key, model, sch, db, runID)
+	if err != nil {
+		return err
+	}
 
-	if err := checkCostCeiling(db, runID, model, cleaned.Markdown, cfg.MaxCost); err != nil {
+	if err := checkCostCeiling(db, runID, provider, model, cleaned.Markdown, cfg.MaxCost); err != nil {
 		if ferr := db.FinishRun(runID, 0, 0, "error"); ferr != nil {
 			fmt.Fprintf(os.Stderr, "warning: finish run: %v\n", ferr)
 		}

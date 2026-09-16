@@ -198,6 +198,34 @@ func (d *DB) LLMCallCount(runID string) (int, error) {
 	return n, nil
 }
 
+// LLMCalls returns llm_calls rows for a run, oldest first (cost/provider assertions).
+// Empty runID returns all rows, mirroring LLMCallCount.
+func (d *DB) LLMCalls(runID string) ([]LLMCall, error) {
+	q := `SELECT provider, model, prompt_tokens, completion_tokens, usd_estimate, purpose FROM llm_calls ORDER BY id`
+	var args []any
+	if runID != "" {
+		q = `SELECT provider, model, prompt_tokens, completion_tokens, usd_estimate, purpose FROM llm_calls WHERE run_id=? ORDER BY id`
+		args = []any{runID}
+	}
+	rows, err := d.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list llm calls: %w", err)
+	}
+	defer func() { _ = rows.Close() }() //nolint:errcheck // read-only; close unactionable
+	var out []LLMCall
+	for rows.Next() {
+		var c LLMCall
+		if err := rows.Scan(&c.Provider, &c.Model, &c.PromptTokens, &c.CompletionTokens, &c.USDEstimate, &c.Purpose); err != nil {
+			return nil, fmt.Errorf("store: scan llm call: %w", err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list llm calls: %w", err)
+	}
+	return out, nil
+}
+
 // ClaimedURL is one frontier row claimed for fetching.
 type ClaimedURL struct {
 	URL     string

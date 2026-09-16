@@ -45,7 +45,7 @@ func newCrawlCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&sameHost, "same-host", true, "follow only same-host links")
 	cmd.Flags().Float64Var(&rate, "rate", 1, "per-host requests/sec")
 	cmd.Flags().BoolVar(&ignoreRobots, "ignore-robots", false, "fetch despite robots.txt (prints a warning)")
-	cmd.Flags().StringVar(&provider, "provider", "", "anthropic|openai|ollama")
+	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp)
 	cmd.Flags().StringVar(&model, "model", "", "model name")
 	return cmd
 }
@@ -96,7 +96,7 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		model = o.Model
 	}
 	key := cfg.APIKey(provider)
-	if key == "" && !isFreeProvider(provider) {
+	if key == "" && needsAPIKey(provider) {
 		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
 	}
 	sch, err := extract.LoadSchema(cfg.Schema)
@@ -118,7 +118,10 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	if !resuming {
 		runID = uuidNew()
 	}
-	ex := newExtractor(provider, key, model, sch, db, runID)
+	ex, err := newExtractor(provider, key, model, sch, db, runID)
+	if err != nil {
+		return err
+	}
 	propose := func(pctx context.Context, fields []string, trimmed string) (map[string]string, error) {
 		props := map[string]any{}
 		for _, f := range fields {
@@ -135,8 +138,11 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		if merr != nil {
 			return nil, merr
 		}
-		pex := newExtractor(provider, key, model, asch, db, runID)
-		if cerr := checkCostCeiling(db, runID, model, trimmed, cfg.MaxCost); cerr != nil {
+		pex, err := newExtractor(provider, key, model, asch, db, runID)
+		if err != nil {
+			return nil, err
+		}
+		if cerr := checkCostCeiling(db, runID, provider, model, trimmed, cfg.MaxCost); cerr != nil {
 			return nil, cerr
 		}
 		res, xerr := pex.Extract(pctx, extract.ExtractInput{

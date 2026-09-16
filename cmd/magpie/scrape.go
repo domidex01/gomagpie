@@ -34,7 +34,7 @@ func newScrapeCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&schema, "schema", "", "JSON Schema file (yaml/json)")
 	cmd.Flags().StringVar(&render, "render", "", "auto|static|browser")
-	cmd.Flags().StringVar(&provider, "provider", "", "anthropic|openai|ollama")
+	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp)
 	cmd.Flags().StringVar(&model, "model", "", "model name")
 	cmd.Flags().StringVar(&out, "out", "", "output path (default stdout)")
 	cmd.Flags().StringVar(&format, "format", "", "json|jsonl (csv|sqlite not supported in Phase 1)")
@@ -138,11 +138,15 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		model = o.Model
 	}
 	key := cfg.APIKey(provider)
-	if key == "" && !isFreeProvider(provider) {
+	if key == "" && needsAPIKey(provider) {
 		finish(0, 0, "error")
 		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
 	}
-	ex := newExtractor(provider, key, model, sch, db, runID)
+	ex, err := newExtractor(provider, key, model, sch, db, runID)
+	if err != nil {
+		finish(0, 1, "error")
+		return err
+	}
 
 	// Selector cache: hit + all required fields non-null → 0 LLM calls.
 	if !cfg.NoCache {
@@ -160,7 +164,7 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 
 	// --max-cost pre-check: running total + projected next-call cost.
 	promptText := "Extract structured data.\n" + string(cleaned.StructuredData) + "\n" + cleaned.Markdown
-	if err := checkCostCeiling(db, runID, model, promptText, cfg.MaxCost); err != nil {
+	if err := checkCostCeiling(db, runID, provider, model, promptText, cfg.MaxCost); err != nil {
 		finish(0, 0, "error")
 		return err
 	}

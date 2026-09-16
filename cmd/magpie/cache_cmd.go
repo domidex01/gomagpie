@@ -28,7 +28,7 @@ func newCacheCmd() *cobra.Command {
 	heal.Flags().String("domain", "", "domain to heal (required)")
 	heal.Flags().String("schema", "", "schema file (required)")
 	heal.Flags().String("seed-url", "", "BFS seed URL (required)")
-	heal.Flags().String("provider", "", "anthropic|openai|ollama")
+	heal.Flags().String("provider", "", ProviderHelp)
 	heal.Flags().String("model", "", "model name")
 	// MarkFlagRequired fails only for unregistered flags (programmer bug here).
 	_ = heal.MarkFlagRequired("domain")   //nolint:errcheck // flags registered just above
@@ -158,7 +158,7 @@ func runCacheHeal(cmd *cobra.Command, _ []string) error {
 		model = modelFlag
 	}
 	key := cfg.APIKey(provider)
-	if key == "" && !isFreeProvider(provider) {
+	if key == "" && needsAPIKey(provider) {
 		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
 	}
 	db, err := store.Open(cfg.CacheDB)
@@ -170,7 +170,10 @@ func runCacheHeal(cmd *cobra.Command, _ []string) error {
 	if err := db.BeginRun(runID, "cache-heal"); err != nil {
 		return err
 	}
-	ex := newExtractor(provider, key, model, sch, db, runID)
+	ex, err := newExtractor(provider, key, model, sch, db, runID)
+	if err != nil {
+		return err
+	}
 
 	// BFS ≤3 pages from the seed (static fetch only).
 	static, err := fetch.NewStaticFetcher()
@@ -195,7 +198,7 @@ func runCacheHeal(cmd *cobra.Command, _ []string) error {
 		if cerr != nil {
 			continue
 		}
-		if cerr := checkCostCeiling(db, runID, model, cleaned.Markdown, cfg.MaxCost); cerr != nil {
+		if cerr := checkCostCeiling(db, runID, provider, model, cleaned.Markdown, cfg.MaxCost); cerr != nil {
 			return cerr
 		}
 		res, xerr := ex.Extract(ctx, extract.ExtractInput{

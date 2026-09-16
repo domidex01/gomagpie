@@ -33,7 +33,7 @@ func rootCmd() *cobra.Command {
 	}
 	root.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path")
 	root.PersistentFlags().StringVar(&cacheDB, "cache-db", "", "SQLite cache DB path")
-	root.PersistentFlags().Float64Var(&maxCost, "max-cost", 0, "USD cost ceiling (abort before exceeding)")
+	root.PersistentFlags().Float64Var(&maxCost, "max-cost", 0, "USD cost ceiling (abort before exceeding; flat-rate providers codex, opencode-go exempt)")
 	root.PersistentFlags().StringVar(&apiKey, "api-key", "", "provider API key (overrides env/keyring)")
 	root.AddCommand(newScrapeCmd(), newExtractCmd(), newConfigCmd(), newCrawlCmd(), newCacheCmd())
 	return root

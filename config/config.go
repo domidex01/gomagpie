@@ -74,6 +74,14 @@ func DefaultModel(provider string) string {
 		return "gpt-4o-mini"
 	case "ollama":
 		return "llama3.1"
+	case "openrouter":
+		return "openai/gpt-4o-mini" // cheap sane default; any OpenRouter model id works
+	case "codex":
+		return "gpt-5.2"
+	case "opencode-go":
+		return "glm-5.3"
+	case "opencode-zen":
+		return "claude-sonnet-4-6"
 	default:
 		return "claude-sonnet-5"
 	}
@@ -233,12 +241,17 @@ type Flags struct {
 	APIKeyChanged   bool
 }
 
+// keyEnvName maps a provider id to its env-var middle: opencode-go → OPENCODE_GO.
+func keyEnvName(provider string) string {
+	return strings.ToUpper(strings.ReplaceAll(provider, "-", "_"))
+}
+
 // APIKey resolves flag > env > keyring > (no file keys; returns "" when absent).
 func (c Config) APIKey(provider string) string {
 	if c.APIKeyFlag != "" {
 		return c.APIKeyFlag
 	}
-	p := strings.ToUpper(strings.ReplaceAll(provider, "-", "_"))
+	p := keyEnvName(provider)
 	for _, name := range []string{"GOMAGPIE_" + p + "_API_KEY", "GOMAGPIE_API_KEY"} {
 		if v := os.Getenv(name); v != "" {
 			return v
@@ -254,7 +267,7 @@ func (c Config) APIKey(provider string) string {
 func SetKey(provider, key string) error {
 	if err := keyring.Set(keyringService, strings.ToLower(provider), key); err != nil {
 		return fmt.Errorf("no secret service; export GOMAGPIE_%s_API_KEY instead: %w",
-			strings.ToUpper(provider), err)
+			keyEnvName(provider), err)
 	}
 	return nil
 }

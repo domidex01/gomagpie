@@ -20,6 +20,8 @@ type fakeProvider struct {
 	script []string
 	calls  int
 	bodies []string
+	// headers parallels bodies: one cloned header map per call.
+	headers []http.Header
 }
 
 func newFakeProvider(t *testing.T, script ...string) (*httptest.Server, *fakeProvider) {
@@ -35,6 +37,7 @@ func newFakeProvider(t *testing.T, script ...string) (*httptest.Server, *fakePro
 		defer fp.mu.Unlock()
 		fp.calls++
 		fp.bodies = append(fp.bodies, string(body))
+		fp.headers = append(fp.headers, r.Header.Clone())
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		idx := min(fp.calls-1, len(fp.script)-1)
@@ -48,12 +51,42 @@ func newFakeProvider(t *testing.T, script ...string) (*httptest.Server, *fakePro
 
 func (f *fakeProvider) callCount() int { f.mu.Lock(); defer f.mu.Unlock(); return f.calls }
 
+func (f *fakeProvider) lastHeader(key string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.headers) == 0 {
+		return ""
+	}
+	return f.headers[len(f.headers)-1].Get(key)
+}
+
 func openAIEnvelope(raw string) string {
 	b, merr := json.Marshal(raw)
 	if merr != nil {
 		panic(merr) // marshaling a string cannot fail
 	}
 	return `{"choices":[{"message":{"content":` + string(b) + `},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`
+}
+
+// openAIEnvelopeCost adds provider-computed usage.cost (the OpenRouter shape).
+func openAIEnvelopeCost(raw string, cost float64) string {
+	b, merr := json.Marshal(raw)
+	if merr != nil {
+		panic(merr) // marshaling a string cannot fail
+	}
+	cb, merr := json.Marshal(cost) // canonical float rendering
+	if merr != nil {
+		panic(merr) // marshaling a float cannot fail
+	}
+	return `{"choices":[{"message":{"content":` + string(b) + `},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10,"cost":` + string(cb) + `}}`
+}
+
+func anthropicEnvelope(raw string) string {
+	b, merr := json.Marshal(raw)
+	if merr != nil {
+		panic(merr) // marshaling a string cannot fail
+	}
+	return `{"content":[{"type":"text","text":` + string(b) + `}],"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":10}}`
 }
 
 func mustAbs(t *testing.T, p string) string {
