@@ -14,9 +14,17 @@ import (
 	"gomagpie/store"
 )
 
+// ProviderHelp is the single home for the --provider value list, shared by
+// every command so help text can't drift per-command.
+const ProviderHelp = "anthropic|openai|ollama|openrouter|codex|opencode-go|opencode-zen"
+
 // newExtractor builds the provider adapter with run-logging attached.
 // One home for the provider switch so scrape and extract can't drift apart.
-func newExtractor(provider, key, model string, sch *extract.Schema, db *store.DB, runID string) extract.Extractor {
+// Unknown providers error loudly — a typo must never silently bill Anthropic.
+func newExtractor(provider, key, model string, sch *extract.Schema, db *store.DB, runID string) (extract.Extractor, error) {
+	// Normalize once: adapters log this id into llm_calls, so raw flag
+	// casing must never fork the accounting.
+	provider = strings.ToLower(provider)
 	log := func(purpose string, u extract.TokenUsage) {
 		if err := db.LogLLMCall(runID, store.LLMCall{
 			Provider: provider, Model: model,
@@ -26,22 +34,69 @@ func newExtractor(provider, key, model string, sch *extract.Schema, db *store.DB
 			fmt.Fprintf(os.Stderr, "warning: log llm call: %v\n", err)
 		}
 	}
-	switch strings.ToLower(provider) {
+	switch provider {
 	case "openai", "ollama":
 		a := extract.NewOpenAI("", key, model, sch)
 		a.Log = log
-		return a
-	default:
+		return a, nil
+	case "anthropic":
 		a := extract.NewAnthropic("", key, model, sch)
 		a.Log = log
-		return a
+		return a, nil
+	case "openrouter":
+		a := extract.NewOpenAI("https://openrouter.ai/api/v1", key, model, sch)
+		a.Provider = provider
+		a.Log = log
+		a.ExtraHeaders = map[string]string{
+			"HTTP-Referer": "https://github.com/you/gomagpie",
+			"X-Title":      "magpie",
+		}
+		// Hard schema routing: without require_parameters OpenRouter may
+		// route to an upstream that treats the schema as a hint.
+		a.BodyExtra = map[string]any{"provider": map[string]any{"require_parameters": true}}
+		return a, nil
+	case "opencode-go", "opencode-zen":
+		return newZenExtractor(provider, key, model, sch, log, runID)
+	case "codex":
+		a := extract.NewCodexExec(model, sch, log)
+		if err := a.Preflight(); err != nil {
+			return nil, err
+		}
+		return a, nil
+	default:
+		return nil, fail(2, "unknown provider %q (want %s)", provider, ProviderHelp)
 	}
+}
+
+// newZenExtractor builds the OpenCode Go/Zen adapter: base URL per billing
+// (flat plan vs pay-as-you-go credits), adapter per model prefix, session +
+// UA headers on every call.
+func newZenExtractor(provider, key, model string, sch *extract.Schema, log func(string, extract.TokenUsage), runID string) (extract.Extractor, error) {
+	base := "https://opencode.ai/zen/v1"
+	if provider == "opencode-go" {
+		base = "https://opencode.ai/zen/go/v1"
+	}
+	headers := map[string]string{"User-Agent": extract.MagpieUA}
+	if extract.ZenUsesMessages(model) {
+		a := extract.NewAnthropic(base, key, model, sch)
+		a.Provider, a.SessionID, a.ExtraHeaders, a.Log = provider, runID, headers, log
+		return a, nil
+	}
+	a := extract.NewOpenAI(base, key, model, sch)
+	a.Provider, a.SessionID, a.ExtraHeaders, a.Log = provider, runID, headers, log
+	return a, nil
 }
 
 // checkCostCeiling fails closed: an unknown running total aborts before any
 // LLM spend. promptText is the full prompt that ProjectedCost prices.
-func checkCostCeiling(db *store.DB, runID, model, promptText string, maxCost float64) error {
+// Flat-rate providers (codex, opencode-go) bill the subscription, not the
+// call, so the ceiling exempts them immediately instead of projecting a
+// bogus per-token floor.
+func checkCostCeiling(db *store.DB, runID, provider, model, promptText string, maxCost float64) error {
 	if maxCost <= 0 {
+		return nil
+	}
+	if extract.IsFlatRateProvider(provider) {
 		return nil
 	}
 	running, err := db.RunCost(runID)
@@ -98,6 +153,7 @@ type extractedOut struct {
 	Title     string         `json:"title"`
 	Extracted map[string]any `json:"extracted"`
 	Usage     usageOut       `json:"usage"`
+	FromCache bool           `json:"from_cache"`
 }
 
 func marshalOut(v any, what string) (string, error) {
@@ -119,8 +175,14 @@ func writeOut(path, s string) error {
 	return nil
 }
 
-func isFreeProvider(p string) bool {
-	return strings.ToLower(p) == "ollama"
+// needsAPIKey reports whether a provider needs an API key: ollama is local,
+// codex shells out to the user's own logged-in CLI.
+func needsAPIKey(p string) bool {
+	switch strings.ToLower(p) {
+	case "ollama", "codex":
+		return false
+	}
+	return true
 }
 
 func uuidNew() string {

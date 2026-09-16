@@ -23,6 +23,24 @@ GOMAGPIE_EXTRACT_PROVIDER=ollama ./magpie config show
 ```
 
 API keys resolve as: `--api-key` flag > `GOMAGPIE_<PROVIDER>_API_KEY` env > OS keyring > config file.
+(Dashes become underscores: `opencode-go` → `GOMAGPIE_OPENCODE_GO_API_KEY`.)
+
+## Providers
+
+`--provider` takes `anthropic|openai|ollama|openrouter|codex|opencode-go|opencode-zen`.
+
+| Provider | Auth | Billing | Notes |
+| :-- | :-- | :-- | :-- |
+| `anthropic`, `openai` | API key | Metered, price table | Native structured output |
+| `ollama` | none (local) | Free | Base-URL switch on the OpenAI adapter |
+| `openrouter` | `GOMAGPIE_OPENROUTER_API_KEY` | Metered, costed from `usage.cost` | Sends `provider.require_parameters` + Referer/Title so the schema is enforced, not a hint |
+| `codex` | none — uses your logged-in Codex CLI | Your subscription | Shells out to `codex exec` (`--output-schema --ephemeral --ignore-user-config`); needs a current CLI, no API key, exempt from `--max-cost` |
+| `opencode-go` | `GOMAGPIE_OPENCODE_GO_API_KEY` | Flat plan, exempt from `--max-cost` | Flat-plan traffic is monitored for abuse — extraction is tiny, but if in doubt use Zen |
+| `opencode-zen` | `GOMAGPIE_OPENCODE_ZEN_API_KEY` | Pay-as-you-go credits (metered) | Same endpoints under `/zen/v1`; model prefix picks `/chat/completions` vs `/messages`; calls carry `x-opencode-session` + magpie UA |
+
+Claude models are reached via API key, OpenRouter, or Zen only — reusing a
+Claude Pro/Max subscription token outside Claude Code is banned by Anthropic.
+Zen `/responses`-only models are unsupported (different API shape).
 
 ## Commands
 

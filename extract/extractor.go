@@ -16,6 +16,7 @@ type ExtractInput struct {
 	StructuredData json.RawMessage
 	Schema         *Schema
 	PromptExtra    string // repair context appended on retries
+	Purpose        string // first-attempt log purpose; "" defaults to "extract"
 }
 
 // ExtractResult is validated, coerced output.
@@ -34,8 +35,10 @@ type Extractor interface {
 	Name() string
 }
 
-// providerCall is one raw LLM round-trip returning output text + token counts.
-type providerCall func(ctx context.Context, system, user string) (text string, prompt, completion int, err error)
+// providerCall is one raw LLM round-trip returning output text + usage.
+// USDEstimate is set only when the provider reports real cost (usage.cost);
+// otherwise runRepairLoop falls back to the price table.
+type providerCall func(ctx context.Context, system, user string) (string, TokenUsage, error)
 
 // runRepairLoop implements spec §3.3: max 3 attempts; repair prompt embeds
 // validator err.Error() verbatim.
@@ -45,7 +48,7 @@ func runRepairLoop(ctx context.Context, call providerCall, log func(purpose stri
 	var lastErr error
 	var total TokenUsage
 	for attempt := 0; attempt < 3; attempt++ {
-		text, pt, ct, err := call(ctx, system, user)
+		text, u, err := call(ctx, system, user)
 		if err != nil {
 			// Transport errors fail loudly (no validator text to repair with).
 			if isTruncation(err) {
@@ -53,16 +56,21 @@ func runRepairLoop(ctx context.Context, call providerCall, log func(purpose stri
 			}
 			return ExtractResult{}, fmt.Errorf("extract: provider: %w", err)
 		}
-		usage := TokenUsage{PromptTokens: pt, CompletionTokens: ct, USDEstimate: EstimateCost(model, pt, ct)}
-		total.PromptTokens += pt
-		total.CompletionTokens += ct
-		total.USDEstimate += usage.USDEstimate
-		purpose := "extract"
+		// Cost policy lives in costFor (cost.go): provider-reported cost wins,
+		// flat-rate stays 0 quietly, otherwise the price table.
+		u.USDEstimate = costFor(provider, model, u)
+		total.PromptTokens += u.PromptTokens
+		total.CompletionTokens += u.CompletionTokens
+		total.USDEstimate += u.USDEstimate
+		purpose := in.Purpose
+		if purpose == "" {
+			purpose = "extract"
+		}
 		if attempt > 0 {
 			purpose = "repair"
 		}
 		if log != nil {
-			log(purpose, usage)
+			log(purpose, u)
 		}
 		if verr := in.Schema.Validate([]byte(text)); verr != nil {
 			lastErr = verr
@@ -123,6 +131,12 @@ func isTruncation(err error) bool {
 	_, ok := err.(*truncError)
 	return ok
 }
+
+// SessionHeader identifies the run to OpenCode Zen/Go (required server-side).
+const SessionHeader = "x-opencode-session"
+
+// MagpieUA identifies gomagpie on Zen/Go calls (required alongside SessionHeader).
+const MagpieUA = "magpie (+https://github.com/you/gomagpie)"
 
 // schemaDoc round-trips a schema through JSON so providers get a plain
 // map without yaml-node types.

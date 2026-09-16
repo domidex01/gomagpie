@@ -64,6 +64,31 @@ func TestKeyLookupOrder(t *testing.T) {
 	}
 }
 
+func TestKeyEnvDashToUnderscore(t *testing.T) {
+	isolatedXDG(t)
+	cfg := config.DefaultConfig()
+	t.Setenv("GOMAGPIE_OPENCODE_GO_API_KEY", "env-key")
+	if k := cfg.APIKey("opencode-go"); k != "env-key" {
+		t.Errorf("APIKey(opencode-go) = %q, want dash-to-underscore env hit", k)
+	}
+}
+
+func TestDefaultModels(t *testing.T) {
+	for provider, want := range map[string]string{
+		"anthropic":    "claude-sonnet-5",
+		"openai":       "gpt-4o-mini",
+		"ollama":       "llama3.1",
+		"openrouter":   "openai/gpt-4o-mini",
+		"codex":        "gpt-5.2",
+		"opencode-go":  "glm-5.3",
+		"opencode-zen": "claude-sonnet-4-6",
+	} {
+		if got := config.DefaultModel(provider); got != want {
+			t.Errorf("DefaultModel(%q) = %q, want %q", provider, got, want)
+		}
+	}
+}
+
 func TestShowRedacts(t *testing.T) {
 	isolatedXDG(t)
 	t.Setenv("GOMAGPIE_ANTHROPIC_API_KEY", "super-secret")

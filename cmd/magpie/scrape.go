@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 
 	"gomagpie/clean"
 	"gomagpie/config"
 	"gomagpie/extract"
 	"gomagpie/fetch"
+	"gomagpie/selector"
 	"gomagpie/store"
 
 	"github.com/spf13/cobra"
@@ -31,7 +34,7 @@ func newScrapeCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&schema, "schema", "", "JSON Schema file (yaml/json)")
 	cmd.Flags().StringVar(&render, "render", "", "auto|static|browser")
-	cmd.Flags().StringVar(&provider, "provider", "", "anthropic|openai|ollama")
+	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp)
 	cmd.Flags().StringVar(&model, "model", "", "model name")
 	cmd.Flags().StringVar(&out, "out", "", "output path (default stdout)")
 	cmd.Flags().StringVar(&format, "format", "", "json|jsonl (csv|sqlite not supported in Phase 1)")
@@ -135,15 +138,33 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		model = o.Model
 	}
 	key := cfg.APIKey(provider)
-	if key == "" && !isFreeProvider(provider) {
+	if key == "" && needsAPIKey(provider) {
 		finish(0, 0, "error")
 		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
 	}
-	ex := newExtractor(provider, key, model, sch, db, runID)
+	ex, err := newExtractor(provider, key, model, sch, db, runID)
+	if err != nil {
+		finish(0, 1, "error")
+		return err
+	}
+
+	// Selector cache: hit + all required fields non-null → 0 LLM calls.
+	if !cfg.NoCache {
+		if doc, ok, gerr := db.GetSelectors(domainOfURL(cleaned.FinalURL), selector.SchemaHash(sch)); gerr == nil && ok {
+			if rec, nulls := selectorApply(doc, sch, page.HTML, cleaned.StructuredData); len(nulls) == 0 {
+				finish(1, 0, "finished")
+				edoc, merr := extractedDocCache(cleaned, page, rec)
+				if merr != nil {
+					return merr
+				}
+				return writeOut(cfg.Out, edoc)
+			}
+		}
+	}
 
 	// --max-cost pre-check: running total + projected next-call cost.
 	promptText := "Extract structured data.\n" + string(cleaned.StructuredData) + "\n" + cleaned.Markdown
-	if err := checkCostCeiling(db, runID, model, promptText, cfg.MaxCost); err != nil {
+	if err := checkCostCeiling(db, runID, provider, model, promptText, cfg.MaxCost); err != nil {
 		finish(0, 0, "error")
 		return err
 	}
@@ -226,6 +247,29 @@ func extractedDoc(c clean.CleanedPage, page *fetch.FetchResponse, res extract.Ex
 			PromptTokens: res.Usage.PromptTokens, CompletionTokens: res.Usage.CompletionTokens,
 			USDEstimate: res.Usage.USDEstimate, Attempts: res.Attempts,
 		},
+	}, "scrape")
+}
+
+func domainOfURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return "file"
+	}
+	return strings.ToLower(u.Host)
+}
+
+func selectorApply(docJSON string, sch *extract.Schema, html []byte, sidecar json.RawMessage) (map[string]any, []string) {
+	var doc selector.SelectorDoc
+	if err := json.Unmarshal([]byte(docJSON), &doc); err != nil {
+		return nil, []string{"*"}
+	}
+	return selector.NewApplier(doc, sch).Apply(string(html), sidecar)
+}
+
+func extractedDocCache(c clean.CleanedPage, page *fetch.FetchResponse, rec map[string]any) (string, error) {
+	return marshalOut(extractedOut{
+		URL: page.URL, FinalURL: c.FinalURL, Title: c.Title,
+		Extracted: rec, FromCache: true,
 	}, "scrape")
 }
 

@@ -25,16 +25,44 @@ var priceTable = map[string][2]float64{
 // EstimateCost computes USD for a model + token counts.
 // Unknown model → warning + 0, never blocks.
 func EstimateCost(model string, prompt, completion int) float64 {
-	p, ok := priceTable[model]
-	if !ok {
-		// ollama/* local models are free.
-		if strings.HasPrefix(strings.ToLower(model), "ollama/") || strings.HasPrefix(strings.ToLower(model), "llama") {
-			return 0
-		}
-		fmt.Fprintf(os.Stderr, "warning: unknown model %q, costing 0\n", model)
+	if c, known := costLookup(model, prompt, completion); known {
+		return c
+	}
+	fmt.Fprintf(os.Stderr, "warning: unknown model %q, costing 0\n", model)
+	return 0
+}
+
+// costFor resolves one call's USD: provider-reported cost (OpenRouter
+// usage.cost) wins; flat-rate providers stay 0 quietly (fixed bill, noise
+// is not signal); otherwise the price table, warning when unknown.
+func costFor(provider, model string, u TokenUsage) float64 {
+	if u.USDEstimate != 0 {
+		return u.USDEstimate
+	}
+	if IsFlatRateProvider(provider) {
 		return 0
 	}
-	return float64(prompt)/1e6*p[0] + float64(completion)/1e6*p[1]
+	return EstimateCost(model, u.PromptTokens, u.CompletionTokens)
+}
+
+func costLookup(model string, prompt, completion int) (float64, bool) {
+	if p, ok := priceTable[model]; ok {
+		return float64(prompt)/1e6*p[0] + float64(completion)/1e6*p[1], true
+	}
+	if isFreeModel(model) {
+		return 0, true
+	}
+	return 0, false
+}
+
+// IsFlatRateProvider reports subscription/flat billing (never USD-metered):
+// the Codex CLI spends the user's subscription, opencode-go is a flat plan.
+func IsFlatRateProvider(provider string) bool {
+	switch strings.ToLower(provider) {
+	case "codex", "opencode-go":
+		return true
+	}
+	return false
 }
 
 // InputPrice returns the per-1M input price (0 when unknown).
