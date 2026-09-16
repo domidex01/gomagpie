@@ -1,0 +1,51 @@
+# AGENTS.md — gomagpie (`magpie`)
+
+Go CLI web scraper: fetch → clean → extract. Source of truth: `spec.md`.
+Binary name: `magpie`. Module: `gomagpie`. Requires Go 1.26+ (go-trafilatura v2).
+
+## Coding standard — read these
+
+Detailed rules live alongside this file and are imported into context:
+
+@.pi/rules/go.md
+@.pi/rules/testing.md
+
+Overarching ethos (lazy senior dev): **the best code is the code never written.** Before
+adding anything, climb the ladder — does it need to exist (YAGNI) → does it already exist
+here (reuse the helper) → does the stdlib/platform do it → does an installed dep do it →
+can it be one line → only then write the minimum. Deletion over addition. Boring over
+clever. Shortest working diff that you actually understand. Mark deliberate shortcuts with
+a `ponytail:` comment naming the ceiling.
+
+Not lazy about: understanding the problem first, input validation at trust boundaries,
+error handling, security.
+
+## Commands
+
+| Command | Action |
+| :-- | :-- |
+| `go build ./...` | Build all packages |
+| `go test ./...` | All tests (fast, hermetic, no network) |
+| `go test -tags browser ./...` | Browser suite (needs Chrome, slow) |
+| `go vet ./...` | Vet |
+| `gofmt -l .` | Must print nothing |
+
+## Structure (per spec §13)
+
+```
+cmd/magpie/      # Cobra root
+core/         # module registry, pipeline wiring
+fetch/ clean/ extract/ selector/ crawl/ store/ mcp/ plugin/ config/
+testdata/     # golden fixtures
+plan/         # big-plan.md + phase-N.md planning artifacts
+```
+
+## Don't / gotchas
+
+- **No new dep without asking:** a dependency is a permanent maintenance and supply-chain cost.
+- **No live-network tests in the default suite** — gate browser tests with `//go:build browser`.
+- **No CGO deps, ever.** No plugins/WASM until core (Milestones 1–2) is stable.
+- **Never import go-rod outside `fetch/`** — the browser sits behind the `Fetcher` interface.
+- **phase-plan/run-phase skills expect `stack: python|nextjs|react|typescript`** — this repo is Go.
+  Write `stack: go` in phase files and expect `run-phase` to hard-block; execute phases manually
+  via the execution prompt instead.

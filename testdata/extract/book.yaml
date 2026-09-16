@@ -1,0 +1,12 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+type: object
+additionalProperties: false
+required: [title, author]
+properties:
+  title:
+    type: string
+  author:
+    type: string
+  year:
+    type: [integer, "null"]
+    x-gomagpie: { coerce: "int" }

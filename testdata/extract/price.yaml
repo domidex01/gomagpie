@@ -1,0 +1,13 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+type: object
+additionalProperties: false
+required: [name, price]
+properties:
+  name:
+    type: string
+    x-gomagpie: { css_hint: "h1", trim: true }
+  price:
+    type: number
+    x-gomagpie:
+      css_hint: "span.price"
+      coerce: "eur_decimal"

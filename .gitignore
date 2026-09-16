@@ -1,0 +1,5 @@
+/magpie
+/tmp/
+*.test
+*.out
+.claude/
