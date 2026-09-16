@@ -36,13 +36,9 @@ func (a *AnthropicAdapter) Extract(ctx context.Context, in ExtractInput) (Extrac
 	if in.Schema == nil {
 		return ExtractResult{}, fmt.Errorf("extract: nil schema")
 	}
-	raw, err := json.Marshal(in.Schema.Raw)
+	doc, err := schemaDoc(in.Schema.Raw)
 	if err != nil {
-		return ExtractResult{}, fmt.Errorf("extract: marshal schema: %w", err)
-	}
-	var schemaDoc any
-	if err := json.Unmarshal(raw, &schemaDoc); err != nil {
-		return ExtractResult{}, fmt.Errorf("extract: decode schema: %w", err)
+		return ExtractResult{}, err
 	}
 	call := func(ctx context.Context, system, user string) (string, int, int, error) {
 		body := map[string]any{
@@ -51,14 +47,14 @@ func (a *AnthropicAdapter) Extract(ctx context.Context, in ExtractInput) (Extrac
 			"system":     system,
 			"messages":   []any{map[string]any{"role": "user", "content": user}},
 			"output_config": map[string]any{
-				"format": map[string]any{"type": "json_schema", "schema": schemaDoc},
+				"format": map[string]any{"type": "json_schema", "schema": doc},
 			},
 		}
 		headers := map[string]string{
 			"x-api-key":         a.APIKey,
 			"anthropic-version": "2023-06-01",
 		}
-		out, err := postJSON(ctx, a.BaseURL+"/v1/messages", a.APIKey, headers, body)
+		out, err := postJSON(ctx, a.BaseURL+"/v1/messages", headers, body)
 		if err != nil {
 			return "", 0, 0, err
 		}

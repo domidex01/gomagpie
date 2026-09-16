@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"gomagpie/clean"
 	"gomagpie/extract"
@@ -119,43 +117,13 @@ func runExtract(ctx context.Context, o extractOptions) error {
 		return err
 	}
 
-	var ex extract.Extractor
-	switch strings.ToLower(provider) {
-	case "openai", "ollama":
-		a := extract.NewOpenAI("", key, model, sch)
-		a.Log = func(purpose string, u extract.TokenUsage) {
-			if err := db.LogLLMCall(runID, store.LLMCall{Provider: provider, Model: model, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, USDEstimate: u.USDEstimate, Purpose: purpose}); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: log llm call: %v\n", err)
-			}
-		}
-		ex = a
-	default:
-		a := extract.NewAnthropic("", key, model, sch)
-		a.Log = func(purpose string, u extract.TokenUsage) {
-			if err := db.LogLLMCall(runID, store.LLMCall{Provider: provider, Model: model, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, USDEstimate: u.USDEstimate, Purpose: purpose}); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: log llm call: %v\n", err)
-			}
-		}
-		ex = a
-	}
+	ex := newExtractor(provider, key, model, sch, db, runID)
 
-	if cfg.MaxCost > 0 {
-		running, err := db.RunCost(runID)
-		if err != nil {
-			return err // fail closed: never spend against an unknown total
+	if err := checkCostCeiling(db, runID, model, cleaned.Markdown, cfg.MaxCost); err != nil {
+		if ferr := db.FinishRun(runID, 0, 0, "error"); ferr != nil {
+			fmt.Fprintf(os.Stderr, "warning: finish run: %v\n", ferr)
 		}
-		proj := extract.ProjectedCost(model, cleaned.Markdown)
-		if proj == 0 {
-			if toks := extract.EstimatePromptTokens(cleaned.Markdown); toks > 0 {
-				proj = float64(toks) / 1e6 * 2.00
-			}
-		}
-		if running+proj > cfg.MaxCost {
-			if ferr := db.FinishRun(runID, 0, 0, "error"); ferr != nil {
-				fmt.Fprintf(os.Stderr, "warning: finish run: %v\n", ferr)
-			}
-			return fail(6, "cost ceiling exceeded: running %.6f + projected %.6f > max %.6f", running, proj, cfg.MaxCost)
-		}
+		return err
 	}
 
 	res, err := ex.Extract(ctx, extract.ExtractInput{
@@ -170,10 +138,9 @@ func runExtract(ctx context.Context, o extractOptions) error {
 	if ferr := db.FinishRun(runID, 1, 0, "finished"); ferr != nil {
 		fmt.Fprintf(os.Stderr, "warning: finish run: %v\n", ferr)
 	}
-	doc := map[string]any{"extracted": res.Record}
-	b, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return fmt.Errorf("extract: marshal output: %w", err)
+	doc, merr := marshalOut(map[string]any{"extracted": res.Record}, "extract")
+	if merr != nil {
+		return merr
 	}
-	return writeOut(o.Out, string(b))
+	return writeOut(o.Out, doc)
 }

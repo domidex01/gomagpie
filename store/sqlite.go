@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,7 +98,10 @@ func Open(path string) (*DB, error) {
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(ddl); err != nil {
 		if cerr := db.Close(); cerr != nil {
-			return nil, fmt.Errorf("store: migrate: %v (also close: %v)", err, cerr)
+			return nil, errors.Join(
+				fmt.Errorf("store: migrate: %w", err),
+				fmt.Errorf("store: close: %w", cerr),
+			)
 		}
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
@@ -139,17 +143,25 @@ type LLMCall struct {
 	Purpose          string // synth|extract|repair
 }
 
-// LogLLMCall inserts into llm_calls and accumulates run_history totals.
+// LogLLMCall inserts into llm_calls and accumulates run_history totals atomically.
 func (d *DB) LogLLMCall(runID string, c LLMCall) error {
 	ts := time.Now().UTC().Format(time.RFC3339)
-	if _, err := d.db.Exec(`INSERT INTO llm_calls(run_id, provider, model, prompt_tokens, completion_tokens, usd_estimate, purpose, ts) VALUES(?,?,?,?,?,?,?,?)`,
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: log llm call: %w", err)
+	}
+	// ponytail: single deferred Rollback covers all error paths; harmless after Commit.
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`INSERT INTO llm_calls(run_id, provider, model, prompt_tokens, completion_tokens, usd_estimate, purpose, ts) VALUES(?,?,?,?,?,?,?,?)`,
 		runID, c.Provider, c.Model, c.PromptTokens, c.CompletionTokens, c.USDEstimate, c.Purpose, ts); err != nil {
 		return fmt.Errorf("store: log llm call: %w", err)
 	}
-	_, err := d.db.Exec(`UPDATE run_history SET prompt_tokens=prompt_tokens+?, completion_tokens=completion_tokens+?, usd_estimate=usd_estimate+? WHERE run_id=?`,
-		c.PromptTokens, c.CompletionTokens, c.USDEstimate, runID)
-	if err != nil {
+	if _, err := tx.Exec(`UPDATE run_history SET prompt_tokens=prompt_tokens+?, completion_tokens=completion_tokens+?, usd_estimate=usd_estimate+? WHERE run_id=?`,
+		c.PromptTokens, c.CompletionTokens, c.USDEstimate, runID); err != nil {
 		return fmt.Errorf("store: roll up run: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: log llm call: %w", err)
 	}
 	return nil
 }
@@ -179,8 +191,20 @@ func (d *DB) LLMCallCount(runID string) (int, error) {
 	return n, nil
 }
 
+// allowlisted tables for the TableCount test helper.
+var tables = map[string]bool{
+	"selector_cache": true,
+	"crawl_state":    true,
+	"dedup":          true,
+	"run_history":    true,
+	"llm_calls":      true,
+}
+
 // TableCount counts rows in a table (test helper).
 func (d *DB) TableCount(table string) (int, error) {
+	if !tables[table] {
+		return 0, fmt.Errorf("store: unknown table %q", table)
+	}
 	var n int
 	if err := d.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
 		return 0, err
@@ -190,6 +214,11 @@ func (d *DB) TableCount(table string) (int, error) {
 
 // Pragma reads an integer PRAGMA (test helper).
 func (d *DB) Pragma(name string) (int, error) {
+	switch name {
+	case "foreign_keys":
+	default:
+		return 0, fmt.Errorf("store: unknown pragma %q", name)
+	}
 	var v int
 	if err := d.db.QueryRow(`PRAGMA ` + name).Scan(&v); err != nil {
 		return 0, err

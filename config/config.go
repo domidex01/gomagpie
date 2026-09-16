@@ -164,7 +164,9 @@ func (c *Config) overlayEnv() {
 	}
 	if v := os.Getenv("GOMAGPIE_MAX_COST"); v != "" {
 		var f float64
-		if _, err := fmt.Sscanf(v, "%g", &f); err == nil {
+		if _, err := fmt.Sscanf(v, "%g", &f); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: ignoring invalid GOMAGPIE_MAX_COST %q\n", v)
+		} else {
 			c.MaxCost = f
 		}
 	}
@@ -259,12 +261,10 @@ func SetKey(provider, key string) error {
 
 // Redacted returns a copy safe for `config show`.
 func (c Config) Redacted() map[string]any {
-	key := c.APIKey(c.ExtractProvider)
-	ks := "***redacted***"
-	if key == "" {
-		ks = "(not set)"
+	key := "***redacted***"
+	if c.APIKey(c.ExtractProvider) == "" {
+		key = "(not set)"
 	}
-	_ = ks
 	return map[string]any{
 		"extract_provider": c.ExtractProvider,
 		"model":            c.Model,
@@ -272,7 +272,7 @@ func (c Config) Redacted() map[string]any {
 		"format":           c.Format,
 		"cache_db":         c.CacheDB,
 		"max_cost":         c.MaxCost,
-		"api_key":          "***redacted***",
+		"api_key":          key,
 		"config_file":      c.filePath,
 	}
 }
