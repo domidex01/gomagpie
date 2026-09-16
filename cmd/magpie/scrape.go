@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 
 	"gomagpie/clean"
 	"gomagpie/config"
 	"gomagpie/extract"
 	"gomagpie/fetch"
+	"gomagpie/selector"
 	"gomagpie/store"
 
 	"github.com/spf13/cobra"
@@ -141,6 +144,20 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 	}
 	ex := newExtractor(provider, key, model, sch, db, runID)
 
+	// Selector cache: hit + all required fields non-null → 0 LLM calls.
+	if !cfg.NoCache {
+		if doc, ok, gerr := db.GetSelectors(domainOfURL(cleaned.FinalURL), selector.SchemaHash(sch)); gerr == nil && ok {
+			if rec, nulls := selectorApply(doc, sch, page.HTML, cleaned.StructuredData); len(nulls) == 0 {
+				finish(1, 0, "finished")
+				edoc, merr := extractedDocCache(cleaned, page, rec)
+				if merr != nil {
+					return merr
+				}
+				return writeOut(cfg.Out, edoc)
+			}
+		}
+	}
+
 	// --max-cost pre-check: running total + projected next-call cost.
 	promptText := "Extract structured data.\n" + string(cleaned.StructuredData) + "\n" + cleaned.Markdown
 	if err := checkCostCeiling(db, runID, model, promptText, cfg.MaxCost); err != nil {
@@ -226,6 +243,29 @@ func extractedDoc(c clean.CleanedPage, page *fetch.FetchResponse, res extract.Ex
 			PromptTokens: res.Usage.PromptTokens, CompletionTokens: res.Usage.CompletionTokens,
 			USDEstimate: res.Usage.USDEstimate, Attempts: res.Attempts,
 		},
+	}, "scrape")
+}
+
+func domainOfURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return "file"
+	}
+	return strings.ToLower(u.Host)
+}
+
+func selectorApply(docJSON string, sch *extract.Schema, html []byte, sidecar json.RawMessage) (map[string]any, []string) {
+	var doc selector.SelectorDoc
+	if err := json.Unmarshal([]byte(docJSON), &doc); err != nil {
+		return nil, []string{"*"}
+	}
+	return selector.NewApplier(doc, sch).Apply(string(html), sidecar)
+}
+
+func extractedDocCache(c clean.CleanedPage, page *fetch.FetchResponse, rec map[string]any) (string, error) {
+	return marshalOut(extractedOut{
+		URL: page.URL, FinalURL: c.FinalURL, Title: c.Title,
+		Extracted: rec, FromCache: true,
 	}, "scrape")
 }
 

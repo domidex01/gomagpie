@@ -229,3 +229,48 @@ func TestCostTable(t *testing.T) {
 		t.Errorf("projected = %v, want > 0", c)
 	}
 }
+
+func TestExtractPurposeDefault(t *testing.T) {
+	srv, _ := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
+	var purposes []string
+	ex := extract.NewOpenAI(srv.URL, "test-key", "gpt-4o-mini", mustLoadSchema(t, "../testdata/extract/price.yaml"))
+	ex.Log = func(purpose string, _ extract.TokenUsage) { purposes = append(purposes, purpose) }
+	_, err := ex.Extract(t.Context(), extract.ExtractInput{Markdown: "# Widget"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(purposes) != 1 || purposes[0] != "extract" {
+		t.Errorf("purposes = %v, want [extract]", purposes)
+	}
+}
+
+func TestExtractPurposeSynth(t *testing.T) {
+	srv, _ := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
+	var purposes []string
+	ex := extract.NewOpenAI(srv.URL, "test-key", "gpt-4o-mini", mustLoadSchema(t, "../testdata/extract/price.yaml"))
+	ex.Log = func(purpose string, _ extract.TokenUsage) { purposes = append(purposes, purpose) }
+	_, err := ex.Extract(t.Context(), extract.ExtractInput{Markdown: "# Widget", Purpose: "synth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(purposes) != 1 || purposes[0] != "synth" {
+		t.Errorf("purposes = %v, want [synth]", purposes)
+	}
+}
+
+func TestExtractPurposeRepairStillRepair(t *testing.T) {
+	srv, _ := newFakeProvider(t,
+		openAIEnvelope(`{"name":"Widget","price":"12.99"}`),
+		openAIEnvelope(`{"name":"Widget","price":12.99}`),
+	)
+	var purposes []string
+	ex := extract.NewOpenAI(srv.URL, "test-key", "gpt-4o-mini", mustLoadSchema(t, "../testdata/extract/price.yaml"))
+	ex.Log = func(purpose string, _ extract.TokenUsage) { purposes = append(purposes, purpose) }
+	_, err := ex.Extract(t.Context(), extract.ExtractInput{Markdown: "# Widget", Purpose: "synth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(purposes) != 2 || purposes[0] != "synth" || purposes[1] != "repair" {
+		t.Errorf("purposes = %v, want [synth repair]", purposes)
+	}
+}

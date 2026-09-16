@@ -98,6 +98,7 @@ type extractedOut struct {
 	Title     string         `json:"title"`
 	Extracted map[string]any `json:"extracted"`
 	Usage     usageOut       `json:"usage"`
+	FromCache bool           `json:"from_cache"`
 }
 
 func marshalOut(v any, what string) (string, error) {

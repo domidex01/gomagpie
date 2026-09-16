@@ -16,6 +16,7 @@ type ExtractInput struct {
 	StructuredData json.RawMessage
 	Schema         *Schema
 	PromptExtra    string // repair context appended on retries
+	Purpose        string // first-attempt log purpose; "" defaults to "extract"
 }
 
 // ExtractResult is validated, coerced output.
@@ -57,7 +58,10 @@ func runRepairLoop(ctx context.Context, call providerCall, log func(purpose stri
 		total.PromptTokens += pt
 		total.CompletionTokens += ct
 		total.USDEstimate += usage.USDEstimate
-		purpose := "extract"
+		purpose := in.Purpose
+		if purpose == "" {
+			purpose = "extract"
+		}
 		if attempt > 0 {
 			purpose = "repair"
 		}
