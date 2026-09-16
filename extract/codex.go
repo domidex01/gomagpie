@@ -17,13 +17,9 @@ import (
 // stays between the user and their CLI login. Requires a current CLI with
 // --output-schema (native strict schema) and --json usage events.
 type CodexExecAdapter struct {
-	Model string
-	Log   func(purpose string, usage TokenUsage)
-	// LookPath locates the CLI (default exec.LookPath; tests stub via PATH).
-	LookPath func(string) (string, error)
-	// CodexBin overrides the binary path outright.
-	CodexBin string
-	schema   *Schema
+	Model  string
+	Log    func(purpose string, usage TokenUsage)
+	schema *Schema
 }
 
 func NewCodexExec(model string, sch *Schema, log func(string, TokenUsage)) *CodexExecAdapter {
@@ -32,18 +28,8 @@ func NewCodexExec(model string, sch *Schema, log func(string, TokenUsage)) *Code
 
 func (c *CodexExecAdapter) Name() string { return "codex" }
 
-func (c *CodexExecAdapter) lookPath() func(string) (string, error) {
-	if c.LookPath != nil {
-		return c.LookPath
-	}
-	return exec.LookPath
-}
-
 func (c *CodexExecAdapter) bin() (string, error) {
-	if c.CodexBin != "" {
-		return c.CodexBin, nil
-	}
-	bin, err := c.lookPath()("codex")
+	bin, err := exec.LookPath("codex")
 	if err != nil {
 		return "", fmt.Errorf("extract: codex CLI not found on PATH; install it and run `codex login`: %w", err)
 	}
@@ -60,9 +46,8 @@ func (c *CodexExecAdapter) Preflight() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if out, err := exec.CommandContext(ctx, bin, "--version").CombinedOutput(); err != nil {
-		return fmt.Errorf("extract: codex --version failed (reinstall the CLI): %w: %s", err, truncate(out, 200))
-	}
+	// One probe proves liveness and capability: --help must exit 0 and
+	// advertise --output-schema, else the CLI is broken or too old.
 	out, err := exec.CommandContext(ctx, bin, "--help").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("extract: codex --help failed (reinstall the CLI): %w: %s", err, truncate(out, 200))
@@ -111,18 +96,14 @@ func (c *CodexExecAdapter) runOnce(ctx context.Context, system, user string, doc
 		return "", TokenUsage{}, fmt.Errorf("extract: write schema: %w", err)
 	}
 	outFile := filepath.Join(dir, "final.json")
-	prompt := system + "\n\n" + user
-	if err := os.WriteFile(filepath.Join(dir, "prompt.txt"), []byte(prompt), 0o600); err != nil {
-		return "", TokenUsage{}, fmt.Errorf("extract: write prompt: %w", err)
-	}
-	// --ephemeral scopes the cumulative turn.completed usage to this call;
+	// The prompt travels via stdin; only the schema needs a file (the CLI reads it).	// --ephemeral scopes the cumulative turn.completed usage to this call;
 	// --ignore-user-config keeps MCP servers/tools in the user config from
 	// silently dropping the strict schema (codex issue #15451).
 	cmd := exec.CommandContext(ctx, bin, "exec",
 		"--json", "--output-schema", schemaFile,
 		"--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
 		"-o", outFile, "-m", c.Model, "-")
-	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Stdin = strings.NewReader(system + "\n\n" + user)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {

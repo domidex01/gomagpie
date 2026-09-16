@@ -509,10 +509,6 @@ if [ "$1" = "--help" ]; then
   echo "Usage: codex exec [...] --output-schema <file> --json [...]"
   exit 0
 fi
-if [ "$1" = "--version" ]; then
-  echo "codex 1.2.3"
-  exit 0
-fi
 out=""
 prev=""
 for a in "$@"; do

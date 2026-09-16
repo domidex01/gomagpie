@@ -357,9 +357,8 @@ func captureStderr(t *testing.T, fn func()) string {
 // invalid-then-valid | old | fail.
 //
 // Deviations from plan/llm-providers-tests.md §3 (required, else the planned
-// assertions are impossible): answers --help/--version like a current CLI
-// (a verbatim stub would fail preflight in ok mode), and dumps the
-// --output-schema file after a ---schema--- marker (prod removes the temp
+// assertions are impossible): answers --help like a current CLI (a verbatim
+// stub would fail preflight in ok mode), and dumps the --output-schema file after a ---schema--- marker (prod removes the temp
 // dir, so tests could never read the file otherwise).
 const stubCodexScript = `#!/bin/sh
 LOG="$CALL_LOG"
@@ -378,10 +377,6 @@ case "$STUB_MODE" in
 esac
 if [ "$1" = "--help" ]; then
   echo "Usage: codex exec [...] --output-schema <file> --json [...]"
-  exit 0
-fi
-if [ "$1" = "--version" ]; then
-  echo "codex 1.2.3"
   exit 0
 fi
 if [ -n "$schema" ] && [ -f "$schema" ]; then
@@ -424,28 +419,25 @@ func stubCalls(t *testing.T, logPath string) string {
 	return string(raw)
 }
 
-// schemaFromLog extracts the ---schema--- payload the stub recorded and
-// validates the record against it at runtime (no checked-in fixture to rot).
+// schemaFromLog validates the record against the schema payload the stub
+// actually received on --output-schema (no checked-in fixture to rot, and
+// no circular validation against the fixture the adapter was built with).
 func schemaFromLog(t *testing.T, calls string, rec map[string]any) {
 	t.Helper()
 	parts := strings.Split(calls, "---schema---")
 	if len(parts) < 2 {
 		t.Fatalf("stub log missing ---schema--- marker; log:\n%s", calls)
 	}
-	var doc any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(parts[len(parts)-1])), &doc); err != nil {
-		t.Fatalf("schema file not JSON: %v", err)
+	received, err := extract.ParseSchema([]byte(strings.TrimSpace(parts[len(parts)-1])))
+	if err != nil {
+		t.Fatalf("stub-received schema not parseable: %v", err)
 	}
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sch := mustLoadSchema(t, "../testdata/extract/price.yaml")
-	if err := sch.Validate(raw); err != nil {
+	if err := received.Validate(raw); err != nil {
 		t.Fatalf("record fails stub-received schema: %v", err)
-	}
-	if _, ok := doc.(map[string]any); !ok {
-		t.Fatalf("schema payload not an object: %T", doc)
 	}
 }
 
@@ -681,8 +673,15 @@ func TestCodex_ExecMCPPoisonedConfig(t *testing.T) {
 	if got.Record["price"] != 12.99 {
 		t.Errorf("price = %v, want 12.99", got.Record["price"])
 	}
-	if calls := stubCalls(t, logPath); !strings.Contains(calls, "--ignore-user-config") {
+	calls := stubCalls(t, logPath)
+	if !strings.Contains(calls, "--ignore-user-config") {
 		t.Errorf("argv missing --ignore-user-config; log:\n%s", calls)
+	}
+	// The poisoned server must never reach the CLI at all — neither via
+	// argv, stdin, nor the schema file. (The stub would only see it if
+	// the adapter forwarded CODEX_HOME content somewhere.)
+	if strings.Contains(calls, "npx") {
+		t.Errorf("poisoned MCP config leaked into the codex invocation; log:\n%s", calls)
 	}
 }
 

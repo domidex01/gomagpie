@@ -20,8 +20,6 @@ type AnthropicAdapter struct {
 	Provider string
 	// ExtraHeaders merge into every request (session UA, ...).
 	ExtraHeaders map[string]string
-	// BodyExtra merges into the top-level request body.
-	BodyExtra map[string]any
 	// SessionID sets x-opencode-session when non-empty (Zen/Go require it).
 	SessionID string
 	schema    *Schema
@@ -64,9 +62,6 @@ func (a *AnthropicAdapter) Extract(ctx context.Context, in ExtractInput) (Extrac
 			"output_config": map[string]any{
 				"format": map[string]any{"type": "json_schema", "schema": doc},
 			},
-		}
-		for k, v := range a.BodyExtra {
-			body[k] = v
 		}
 		headers := map[string]string{
 			"x-api-key":         a.APIKey,

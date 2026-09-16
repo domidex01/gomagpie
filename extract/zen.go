@@ -16,13 +16,11 @@ import (
 // model name must degrade to the most common endpoint, not a failed crawl.
 func ZenUsesMessages(model string) bool {
 	m := strings.ToLower(model)
-	if strings.HasPrefix(m, "minimax-") || strings.HasPrefix(m, "claude-") {
-		return true
-	}
-	if strings.HasPrefix(m, "qwen") && (strings.HasSuffix(m, "-max") || strings.HasSuffix(m, "-flash")) {
-		return true
-	}
 	switch {
+	case strings.HasPrefix(m, "minimax-"), strings.HasPrefix(m, "claude-"):
+		return true
+	case strings.HasPrefix(m, "qwen") && (strings.HasSuffix(m, "-max") || strings.HasSuffix(m, "-flash")):
+		return true
 	case strings.HasPrefix(m, "glm-"), strings.HasPrefix(m, "kimi-"),
 		strings.HasPrefix(m, "gpt-"), strings.HasPrefix(m, "deepseek-"),
 		strings.HasPrefix(m, "gemini-"):

@@ -56,15 +56,12 @@ func runRepairLoop(ctx context.Context, call providerCall, log func(purpose stri
 			}
 			return ExtractResult{}, fmt.Errorf("extract: provider: %w", err)
 		}
-		// Provider-reported cost (OpenRouter usage.cost) wins; flat-rate
-		// providers stay 0 quietly (fixed bill, noise is not signal).
-		if u.USDEstimate == 0 && !IsFlatRateProvider(provider) {
-			u.USDEstimate = EstimateCost(model, u.PromptTokens, u.CompletionTokens)
-		}
+		// Cost policy lives in costFor (cost.go): provider-reported cost wins,
+		// flat-rate stays 0 quietly, otherwise the price table.
+		u.USDEstimate = costFor(provider, model, u)
 		total.PromptTokens += u.PromptTokens
 		total.CompletionTokens += u.CompletionTokens
 		total.USDEstimate += u.USDEstimate
-		usage := u
 		purpose := in.Purpose
 		if purpose == "" {
 			purpose = "extract"
@@ -73,7 +70,7 @@ func runRepairLoop(ctx context.Context, call providerCall, log func(purpose stri
 			purpose = "repair"
 		}
 		if log != nil {
-			log(purpose, usage)
+			log(purpose, u)
 		}
 		if verr := in.Schema.Validate([]byte(text)); verr != nil {
 			lastErr = verr

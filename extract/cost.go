@@ -32,11 +32,17 @@ func EstimateCost(model string, prompt, completion int) float64 {
 	return 0
 }
 
-// EstimateCostQuiet is EstimateCost without the stderr warning, for
-// flat-rate providers where the bill is fixed and noise is not signal.
-func EstimateCostQuiet(model string, prompt, completion int) float64 {
-	c, _ := costLookup(model, prompt, completion)
-	return c
+// costFor resolves one call's USD: provider-reported cost (OpenRouter
+// usage.cost) wins; flat-rate providers stay 0 quietly (fixed bill, noise
+// is not signal); otherwise the price table, warning when unknown.
+func costFor(provider, model string, u TokenUsage) float64 {
+	if u.USDEstimate != 0 {
+		return u.USDEstimate
+	}
+	if IsFlatRateProvider(provider) {
+		return 0
+	}
+	return EstimateCost(model, u.PromptTokens, u.CompletionTokens)
 }
 
 func costLookup(model string, prompt, completion int) (float64, bool) {
