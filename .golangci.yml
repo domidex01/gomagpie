@@ -1,0 +1,19 @@
+version: "2"
+linters:
+  enable:
+    - errcheck # repo rule: never swallow errors
+    - staticcheck
+    - ineffassign
+    - unused
+  settings:
+    errcheck:
+      check-blank: true
+      # Close in cleanup paths is idiomatic; failures there are unactionable.
+      exclude-functions:
+        - Close
+run:
+  timeout: 3m
+formatters:
+  enable:
+    - gofmt
+    - goimports

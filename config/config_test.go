@@ -67,7 +67,10 @@ func TestKeyLookupOrder(t *testing.T) {
 func TestShowRedacts(t *testing.T) {
 	isolatedXDG(t)
 	t.Setenv("GOMAGPIE_ANTHROPIC_API_KEY", "super-secret")
-	cfg, _ := config.Load(filepath.Join(t.TempDir(), "nope.yaml"))
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "nope.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := cfg.Redacted()
 	if m["api_key"] != "***redacted***" {
 		t.Errorf("api_key = %v", m["api_key"])

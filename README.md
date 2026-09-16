@@ -40,7 +40,7 @@ Exit codes: 0 ok · 1 runtime · 2 usage · 3 all-failed · 6 cost ceiling · 7 
 go test ./...                                  # hermetic: no network, browser, or keys
 go test -tags browser ./fetch/ -run TestRodSmoke  # needs Chrome; skips otherwise
 go test ./clean/ -update                       # regenerate markdown goldens
-go vet ./... && test -z "$(gofmt -l .)"
+golangci-lint run ./... && go vet ./... && test -z "$(gofmt -l .)"
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...  # + linux/amd64, darwin/arm64
 ```
 

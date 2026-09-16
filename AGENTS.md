@@ -28,6 +28,7 @@ error handling, security.
 | `go test ./...` | All tests (fast, hermetic, no network) |
 | `go test -tags browser ./...` | Browser suite (needs Chrome, slow) |
 | `go vet ./...` | Vet |
+| `golangci-lint run ./...` | Lint (errcheck, staticcheck, ineffassign, unused; config `.golangci.yml`) |
 | `gofmt -l .` | Must print nothing |
 
 ## Structure (per spec §13)

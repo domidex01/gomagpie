@@ -13,7 +13,11 @@ func openTempDB(t *testing.T) *store.DB {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
 	return db
 }
 
@@ -52,11 +56,17 @@ func TestRunRoundTrip(t *testing.T) {
 	if err := db.FinishRun("r1", 1, 0, "finished"); err != nil {
 		t.Fatal(err)
 	}
-	n, _ := db.LLMCallCount("r1")
+	n, err := db.LLMCallCount("r1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n != 1 {
 		t.Errorf("llm_calls = %d, want 1", n)
 	}
-	c, _ := db.RunCost("r1")
+	c, err := db.RunCost("r1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c != 0.01 {
 		t.Errorf("cost = %v, want 0.01", c)
 	}
@@ -65,5 +75,7 @@ func TestRunRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-open: %v", err)
 	}
-	db2.Close()
+	if err := db2.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 }

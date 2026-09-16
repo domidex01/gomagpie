@@ -77,7 +77,10 @@ func TestCleanSPAShell(t *testing.T) {
 }
 
 func TestSidecarNextData(t *testing.T) {
-	raw, _ := os.ReadFile(filepath.Join("..", "testdata", "clean", "product.html"))
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "clean", "product.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	side := clean.HarvestSidecar(raw)
 	if !strings.Contains(string(side), "__NEXT_DATA__") && !strings.Contains(string(side), "pageProps") {
 		// sidecar holds JSON-LD and/or NEXT_DATA; at minimum JSON-LD must be there
@@ -88,7 +91,10 @@ func TestSidecarNextData(t *testing.T) {
 }
 
 func TestTokenCap(t *testing.T) {
-	raw, _ := os.ReadFile(filepath.Join("..", "testdata", "clean", "article.html"))
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "clean", "article.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	big := strings.Repeat(string(raw), 50)
 	got, err := clean.Clean(t.Context(), clean.RawPage{HTML: []byte(big), FinalURL: "https://example.com/big"})
 	if err != nil {

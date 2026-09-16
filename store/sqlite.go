@@ -96,7 +96,9 @@ func Open(path string) (*DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(ddl); err != nil {
-		db.Close()
+		if cerr := db.Close(); cerr != nil {
+			return nil, fmt.Errorf("store: migrate: %v (also close: %v)", err, cerr)
+		}
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
 	return &DB{db: db, path: path}, nil

@@ -26,7 +26,11 @@ func newFakeProvider(t *testing.T, script ...string) (*httptest.Server, *fakePro
 	t.Helper()
 	fp := &fakeProvider{t: t, script: script}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, rerr := io.ReadAll(r.Body)
+		if rerr != nil {
+			http.Error(w, rerr.Error(), http.StatusBadRequest)
+			return
+		}
 		fp.mu.Lock()
 		defer fp.mu.Unlock()
 		fp.calls++
@@ -34,7 +38,9 @@ func newFakeProvider(t *testing.T, script ...string) (*httptest.Server, *fakePro
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		idx := min(fp.calls-1, len(fp.script)-1)
-		_, _ = io.WriteString(w, fp.script[idx])
+		if _, werr := io.WriteString(w, fp.script[idx]); werr != nil {
+			fp.t.Errorf("write: %v", werr)
+		}
 	}))
 	t.Cleanup(srv.Close)
 	return srv, fp
@@ -43,8 +49,52 @@ func newFakeProvider(t *testing.T, script ...string) (*httptest.Server, *fakePro
 func (f *fakeProvider) callCount() int { f.mu.Lock(); defer f.mu.Unlock(); return f.calls }
 
 func openAIEnvelope(raw string) string {
-	b, _ := json.Marshal(raw)
+	b, merr := json.Marshal(raw)
+	if merr != nil {
+		panic(merr) // marshaling a string cannot fail
+	}
 	return `{"choices":[{"message":{"content":` + string(b) + `},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`
+}
+
+func mustAbs(t *testing.T, p string) string {
+	t.Helper()
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
+}
+
+func mustRead(t *testing.T, p string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func mustOpenDB(t *testing.T, path string) *store.DB {
+	t.Helper()
+	db, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	})
+	return db
+}
+
+func mustCount(t *testing.T, db *store.DB, run string) int {
+	t.Helper()
+	n, err := db.LLMCallCount(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func testEnv(t *testing.T, dbName string) string {
@@ -70,13 +120,13 @@ func codeOf(err error) int {
 
 func TestScrapeNoSchema(t *testing.T) {
 	dbPath := testEnv(t, "cache.db")
-	abs, _ := filepath.Abs("../../testdata/clean/article.html")
+	abs := mustAbs(t, "../../testdata/clean/article.html")
 	out := filepath.Join(t.TempDir(), "out.json")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{Format: "json", Out: out, Render: "static"})
 	if err != nil {
 		t.Fatalf("scrape: %v", err)
 	}
-	raw, _ := os.ReadFile(out)
+	raw := mustRead(t, out)
 	var doc map[string]any
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("stdout not JSON: %v", err)
@@ -84,9 +134,8 @@ func TestScrapeNoSchema(t *testing.T) {
 	if _, ok := doc["markdown"]; !ok {
 		t.Error("missing markdown field")
 	}
-	db, _ := store.Open(dbPath)
-	defer db.Close()
-	n, _ := db.LLMCallCount("")
+	db := mustOpenDB(t, dbPath)
+	n := mustCount(t, db, "")
 	if n != 0 {
 		t.Errorf("llm_calls = %d, want 0", n)
 	}
@@ -97,8 +146,8 @@ func TestScrapeEndToEndFileURL(t *testing.T) {
 	srv, fp := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
 	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
 	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
-	abs, _ := filepath.Abs("../../testdata/clean/article.html")
-	schema, _ := filepath.Abs("../../testdata/extract/price.yaml")
+	abs := mustAbs(t, "../../testdata/clean/article.html")
+	schema := mustAbs(t, "../../testdata/extract/price.yaml")
 	out := filepath.Join(t.TempDir(), "out.json")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{
 		Schema: schema, Format: "json", Out: out, Render: "static",
@@ -110,21 +159,18 @@ func TestScrapeEndToEndFileURL(t *testing.T) {
 	if fp.callCount() < 1 {
 		t.Fatalf("provider calls = 0, want ≥1")
 	}
-	raw, _ := os.ReadFile(out)
+	raw := mustRead(t, out)
 	var doc struct {
 		Extracted map[string]any `json:"extracted"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("stdout not JSON: %v", err)
 	}
-	schRaw, _ := os.ReadFile(schema)
-	_ = schRaw
 	if doc.Extracted["price"] != 12.99 {
 		t.Errorf("price = %v, want 12.99", doc.Extracted["price"])
 	}
-	db, _ := store.Open(dbPath)
-	defer db.Close()
-	n, _ := db.LLMCallCount("")
+	db := mustOpenDB(t, dbPath)
+	n := mustCount(t, db, "")
 	if n < 1 {
 		t.Errorf("llm_calls = %d, want ≥1", n)
 	}
@@ -132,7 +178,7 @@ func TestScrapeEndToEndFileURL(t *testing.T) {
 
 func TestScrapeRenderStaticSPAShell(t *testing.T) {
 	testEnv(t, "cache.db")
-	abs, _ := filepath.Abs("../../testdata/clean/spa-shell.html")
+	abs := mustAbs(t, "../../testdata/clean/spa-shell.html")
 	out := filepath.Join(t.TempDir(), "out.json")
 	// Static render must never touch the browser (no Chrome here).
 	if err := runScrape(t.Context(), "file://"+abs, scrapeOptions{Format: "json", Out: out, Render: "static"}); err != nil {
@@ -142,7 +188,7 @@ func TestScrapeRenderStaticSPAShell(t *testing.T) {
 
 func TestScrapeBadFormat(t *testing.T) {
 	testEnv(t, "cache.db")
-	abs, _ := filepath.Abs("../../testdata/clean/article.html")
+	abs := mustAbs(t, "../../testdata/clean/article.html")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{Format: "csv", Render: "static"})
 	if codeOf(err) == 0 {
 		t.Fatal("expected non-zero exit for csv")
@@ -158,8 +204,8 @@ func TestMaxCostAbortsBeforeCall(t *testing.T) {
 	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
 	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
 	t.Setenv("GOMAGPIE_MAX_COST", "0.000001")
-	abs, _ := filepath.Abs("../../testdata/clean/article.html")
-	schema, _ := filepath.Abs("../../testdata/extract/price.yaml")
+	abs := mustAbs(t, "../../testdata/clean/article.html")
+	schema := mustAbs(t, "../../testdata/extract/price.yaml")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{
 		Schema: schema, Render: "static", Provider: "openai", Model: "gpt-4o-mini",
 	})
@@ -173,11 +219,11 @@ func TestMaxCostAbortsBeforeCall(t *testing.T) {
 
 func TestMissingKeyExit7(t *testing.T) {
 	testEnv(t, "cache.db")
-	os.Unsetenv("GOMAGPIE_OPENAI_API_KEY")
-	os.Unsetenv("GOMAGPIE_ANTHROPIC_API_KEY")
-	os.Unsetenv("GOMAGPIE_API_KEY")
-	abs, _ := filepath.Abs("../../testdata/clean/article.html")
-	schema, _ := filepath.Abs("../../testdata/extract/price.yaml")
+	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "")
+	t.Setenv("GOMAGPIE_ANTHROPIC_API_KEY", "")
+	t.Setenv("GOMAGPIE_API_KEY", "")
+	abs := mustAbs(t, "../../testdata/clean/article.html")
+	schema := mustAbs(t, "../../testdata/extract/price.yaml")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{
 		Schema: schema, Render: "static", Provider: "openai", Model: "gpt-4o-mini",
 	})
@@ -194,11 +240,13 @@ func TestExtractCmdStdinHTML(t *testing.T) {
 	srv, _ := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
 	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
 	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
-	html, _ := os.ReadFile("../../testdata/clean/article.html")
+	html := mustRead(t, "../../testdata/clean/article.html")
 	// Simulate stdin via temp file (no fetch involved).
 	in := filepath.Join(t.TempDir(), "in.html")
-	os.WriteFile(in, html, 0o644)
-	schema, _ := filepath.Abs("../../testdata/extract/price.yaml")
+	if err := os.WriteFile(in, html, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	schema := mustAbs(t, "../../testdata/extract/price.yaml")
 	out := filepath.Join(t.TempDir(), "out.json")
 	err := runExtract(t.Context(), extractOptions{
 		Schema: schema, ContentType: "html", Provider: "openai",
@@ -207,7 +255,7 @@ func TestExtractCmdStdinHTML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
-	raw, _ := os.ReadFile(out)
+	raw := mustRead(t, out)
 	var doc struct {
 		Extracted map[string]any `json:"extracted"`
 	}
@@ -217,9 +265,8 @@ func TestExtractCmdStdinHTML(t *testing.T) {
 	if doc.Extracted["price"] != 12.99 {
 		t.Errorf("price = %v", doc.Extracted["price"])
 	}
-	db, _ := store.Open(dbPath)
-	defer db.Close()
-	n, _ := db.LLMCallCount("")
+	db := mustOpenDB(t, dbPath)
+	n := mustCount(t, db, "")
 	if n < 1 {
 		t.Errorf("llm_calls = %d, want ≥1", n)
 	}

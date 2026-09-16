@@ -94,7 +94,10 @@ func HarvestSidecar(page []byte) json.RawMessage {
 	if len(blocks) == 1 {
 		return blocks[0]
 	}
-	joined, _ := json.Marshal(blocks)
+	joined, err := json.Marshal(blocks)
+	if err != nil {
+		return blocks[0] // elements are pre-validated JSON; unreachable
+	}
 	return joined
 }
 

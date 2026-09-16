@@ -91,7 +91,7 @@ func (s *StaticFetcher) Fetch(ctx context.Context, req FetchRequest) (*FetchResp
 	if err != nil {
 		return nil, fmt.Errorf("fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // body fully read above; close error unactionable
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
 	if err != nil {
 		return nil, fmt.Errorf("fetch: read body: %w", err)

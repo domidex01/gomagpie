@@ -148,7 +148,7 @@ func postJSON(ctx context.Context, url, apiKey string, headers map[string]string
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // body fully read above; close error unactionable
 	out, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
 	if err != nil {
 		return nil, err

@@ -59,8 +59,11 @@ func Coerce(kind, in string) (any, error) {
 			}
 		}
 		if m := regexp.MustCompile(`(\d{1,2})\.(\d{1,2})\.(\d{4})`).FindStringSubmatch(s); m != nil {
-			d, _ := strconv.Atoi(m[1])
-			mo, _ := strconv.Atoi(m[2])
+			d, derr := strconv.Atoi(m[1])
+			mo, merr := strconv.Atoi(m[2])
+			if derr != nil || merr != nil {
+				return nil, fmt.Errorf("extract: coerce iso_date from %q", in)
+			}
 			return fmt.Sprintf("%s-%02d-%02d", m[3], mo, d), nil
 		}
 		return nil, fmt.Errorf("extract: coerce iso_date from %q", in)

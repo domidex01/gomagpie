@@ -37,9 +37,14 @@ func (o *OpenAIAdapter) Extract(ctx context.Context, in ExtractInput) (ExtractRe
 	if in.Schema == nil {
 		return ExtractResult{}, fmt.Errorf("extract: nil schema")
 	}
+	raw, err := json.Marshal(in.Schema.Raw)
+	if err != nil {
+		return ExtractResult{}, fmt.Errorf("extract: marshal schema: %w", err)
+	}
 	var schemaDoc any
-	raw, _ := json.Marshal(in.Schema.Raw)
-	_ = json.Unmarshal(raw, &schemaDoc)
+	if err := json.Unmarshal(raw, &schemaDoc); err != nil {
+		return ExtractResult{}, fmt.Errorf("extract: decode schema: %w", err)
+	}
 	call := func(ctx context.Context, system, user string) (string, int, int, error) {
 		body := map[string]any{
 			"model": o.Model,
