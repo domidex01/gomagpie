@@ -112,8 +112,9 @@ func (f *Frontier) Claim(n int) ([]store.ClaimedURL, error) {
 }
 
 // ExtractLinks parses raw HTML once, resolves a[href] against pageURL, and
-// enqueues same-host links at depth+1 (when sameHost) bounded by maxDepth.
-func (f *Frontier) ExtractLinks(rawHTML []byte, pageURL string, depth, maxDepth int, sameHost bool) (int, error) {
+// enqueues links that pass the compiled Scope (host rule → prefix → globs →
+// ext skip) at depth+1, bounded by maxDepth.
+func (f *Frontier) ExtractLinks(rawHTML []byte, pageURL string, depth, maxDepth int, scope Scope) (int, error) {
 	if depth+1 > maxDepth {
 		return 0, nil
 	}
@@ -140,11 +141,24 @@ func (f *Frontier) ExtractLinks(rawHTML []byte, pageURL string, depth, maxDepth 
 		if abs.Scheme != "http" && abs.Scheme != "https" && abs.Scheme != "file" {
 			return
 		}
-		// ponytail: exact-host equality only; subdomains excluded (ceiling = multi-subdomain sites crawl per-host; upgrade = public-suffix matching).
-		if sameHost && !strings.EqualFold(abs.Host, base.Host) {
+		// Match globs against the canonical form — the exact string that
+		// gets enqueued — so utm stripping and query reordering are
+		// visible to scope matching.
+		c, err := Canonicalize(abs.String())
+		if err != nil {
 			return
 		}
-		if c, err := Canonicalize(abs.String()); err == nil && !seen[c] {
+		cu, err := url.Parse(c)
+		if err != nil {
+			return
+		}
+		if !scope.Allows(base, cu) {
+			return // silent non-enqueue: never fetched, never a page error
+		}
+		if SkipExtension(cu.Path) {
+			return
+		}
+		if !seen[c] {
 			seen[c] = true
 			out = append(out, c)
 		}

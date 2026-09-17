@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -264,5 +265,115 @@ func TestGetRun_Unknown(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "run-nope-xyz") {
 		t.Errorf("error %q does not contain the run id", err)
+	}
+}
+
+// --- Phase D additions: telemetry columns + pre-D migration. ---
+
+// openPreDDB hand-builds the pre-Phase-D run_history (without the three
+// fetch columns) in raw SQL, seeds one row, and hands back the path.
+// The literal copy of the old DDL fails loudly if the real DDL drifts —
+// that failure is the migration-coverage alarm, not a bug.
+func openPreDDB(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "pred.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close raw db: %v", err)
+		}
+	}()
+	preDDL := `
+CREATE TABLE IF NOT EXISTS run_history (
+    run_id            TEXT PRIMARY KEY,
+    command           TEXT NOT NULL,
+    started_at        TEXT NOT NULL,
+    finished_at       TEXT,
+    pages_ok          INTEGER NOT NULL DEFAULT 0,
+    pages_err         INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    usd_estimate      REAL NOT NULL DEFAULT 0,
+    status            TEXT NOT NULL DEFAULT 'running'
+);`
+	if _, err := db.Exec(preDDL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO run_history(run_id, command, started_at, status) VALUES('pre-d-run', 'crawl', '2026-01-01T00:00:00Z', 'finished')`); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestMigration_AddsFetchColumns(t *testing.T) {
+	path := openPreDDB(t)
+	db, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open(pre-D db): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	// Old row readable; new columns report zeroed defaults.
+	info, err := db.GetRun("pre-d-run")
+	if err != nil {
+		t.Fatalf("GetRun(pre-D row): %v", err)
+	}
+	if info.FetchPages != 0 || info.FetchBytes != 0 || info.FetchMs != 0 {
+		t.Errorf("migrated fetch counters = %d/%d/%d, want 0/0/0", info.FetchPages, info.FetchBytes, info.FetchMs)
+	}
+	// And the migrated row accepts new telemetry.
+	if err := db.LogFetch("pre-d-run", 100, 5); err != nil {
+		t.Fatalf("LogFetch on migrated row: %v", err)
+	}
+	if info, err = db.GetRun("pre-d-run"); err != nil {
+		t.Fatal(err)
+	}
+	if info.FetchPages != 1 || info.FetchBytes != 100 {
+		t.Errorf("post-migration counters = %d/%d, want 1/100", info.FetchPages, info.FetchBytes)
+	}
+}
+
+func TestLogFetch_RoundTrip(t *testing.T) {
+	db := openTempDB(t)
+	if err := db.BeginRun("r-fetch", "scrape"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := db.LogFetch("r-fetch", 1234, 56); err != nil {
+			t.Fatal(err)
+		}
+	}
+	info, err := db.GetRun("r-fetch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.FetchPages != 2 || info.FetchBytes != 2468 || info.FetchMs != 112 {
+		t.Errorf("fetch counters = %d/%d/%d, want 2/2468/112", info.FetchPages, info.FetchBytes, info.FetchMs)
+	}
+	// FinishRun must not clobber the telemetry columns.
+	if err := db.FinishRun("r-fetch", 1, 0, "finished"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err = db.GetRun("r-fetch"); err != nil {
+		t.Fatal(err)
+	}
+	if info.FetchPages != 2 {
+		t.Errorf("fetch pages after FinishRun = %d, want 2", info.FetchPages)
+	}
+	// Fresh run: zeroed by DEFAULT 0.
+	if err := db.BeginRun("r-zero", "scrape"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err = db.GetRun("r-zero"); err != nil {
+		t.Fatal(err)
+	}
+	if info.FetchPages != 0 || info.FetchBytes != 0 || info.FetchMs != 0 {
+		t.Errorf("fresh counters = %d/%d/%d, want 0/0/0", info.FetchPages, info.FetchBytes, info.FetchMs)
 	}
 }

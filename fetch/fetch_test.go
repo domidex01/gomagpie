@@ -157,3 +157,37 @@ func TestNeedsBrowserBoundary(t *testing.T) {
 		t.Error("score 2 must escalate")
 	}
 }
+
+// TestStaticGzipBomb: ~55 KB on the wire expands to 60 MB of decoded
+// zeros; the client must cap the DECODED stream at exactly the cap.
+// Hardcoded 50<<20: if the cap changes intentionally this test SHOULD
+// break (it pins the magic number by design).
+func TestStaticGzipBomb(t *testing.T) {
+	const decoded = 60 << 20 // MBs of zeros the bomb expands to
+	mux := http.NewServeMux()
+	mux.HandleFunc("/bomb", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer func() { _ = gz.Close() }() //nolint:errcheck // client aborts mid-stream; write errors expected
+		chunk := make([]byte, 1<<20)      // 1 MB of zeros
+		for i := 0; i < decoded>>20; i++ {
+			if _, err := gz.Write(chunk); err != nil {
+				return // client stopped reading at the cap — expected
+			}
+		}
+	})
+	base := newFakeOrigin(t, mux)
+	// Explicit AllowPrivate (httptest origin is a private literal): this
+	// test pins the bomb cap, not the hatch.
+	f, err := fetch.NewStaticFetcherWithOptions(fetch.SSRFOptions{AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: base + "/bomb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.HTML) != 50<<20 {
+		t.Fatalf("decoded body = %d bytes, want exactly %d (LimitReader cap)", len(resp.HTML), 50<<20)
+	}
+}

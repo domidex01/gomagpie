@@ -27,7 +27,7 @@ var defaultCrawlSchema = []byte(`{"type":"object","properties":{"title":{"type":
 
 // ScrapeIn is the scrape_url input.
 type ScrapeIn struct {
-	URL             string     `json:"url" jsonschema:"absolute http(s) or file URL to scrape"`
+	URL             string     `json:"url" jsonschema:"absolute http(s) URL to scrape (file:// works only when GOMAGPIE_ALLOW_FILE=1; private/loopback hosts are rejected)"`
 	Schema          FlexMap    `json:"schema,omitempty" jsonschema:"JSON Schema object; omit for cleaned markdown only"`
 	Render          string     `json:"render,omitempty" jsonschema:"auto, static, or browser"`
 	UseCache        *FlexBool  `json:"use_cache,omitempty" jsonschema:"apply cached selectors when available"`
@@ -108,12 +108,17 @@ func handleScrape(d Deps) func(context.Context, *sdk.CallToolRequest, ScrapeIn) 
 // CrawlIn is the crawl_site input. Set only RunID to poll a previous run
 // (status path: zero extractor calls).
 type CrawlIn struct {
-	URL      string    `json:"url,omitempty" jsonschema:"seed URL for a fresh crawl"`
-	MaxPages FlexInt   `json:"max_pages,omitempty" jsonschema:"max pages to claim and fetch"`
-	MaxDepth FlexInt   `json:"max_depth,omitempty" jsonschema:"max link depth from seed"`
-	SameHost *FlexBool `json:"same_host,omitempty" jsonschema:"follow only same-host links (default true)"`
-	Schema   FlexMap   `json:"schema,omitempty" jsonschema:"JSON Schema object for extraction"`
-	RunID    string    `json:"run_id,omitempty" jsonschema:"poll a previous run instead of crawling"`
+	URL             string     `json:"url,omitempty" jsonschema:"seed URL for a fresh crawl"`
+	MaxPages        FlexInt    `json:"max_pages,omitempty" jsonschema:"max pages to claim and fetch"`
+	MaxDepth        FlexInt    `json:"max_depth,omitempty" jsonschema:"max link depth from seed"`
+	SameHost        *FlexBool  `json:"same_host,omitempty" jsonschema:"follow only same-host links (default true)"`
+	PathPrefix      string     `json:"path_prefix,omitempty" jsonschema:"only follow links under this path prefix"`
+	Include         StringList `json:"include,omitempty" jsonschema:"URL globs to include, e.g. **/docs/** (** crosses /, * stays in one segment)"`
+	Exclude         StringList `json:"exclude,omitempty" jsonschema:"URL globs to exclude (wins over include)"`
+	AllowSubdomains *FlexBool  `json:"allow_subdomains,omitempty" jsonschema:"follow links into subdomains of the seed host"`
+	NoSitemap       *FlexBool  `json:"no_sitemap,omitempty" jsonschema:"skip sitemap seed expansion"`
+	Schema          FlexMap    `json:"schema,omitempty" jsonschema:"JSON Schema object for extraction"`
+	RunID           string     `json:"run_id,omitempty" jsonschema:"poll a previous run instead of crawling"`
 }
 
 // CrawlOut is the crawl_site output (fresh run and status poll share it).
@@ -152,6 +157,13 @@ func handleCrawl(d Deps) func(context.Context, *sdk.CallToolRequest, CrawlIn) (*
 		if in.SameHost != nil {
 			sameHost = bool(*in.SameHost)
 		}
+		allowSubdomains, noSitemap := false, false
+		if in.AllowSubdomains != nil {
+			allowSubdomains = bool(*in.AllowSubdomains)
+		}
+		if in.NoSitemap != nil {
+			noSitemap = bool(*in.NoSitemap)
+		}
 		key := ""
 		if d.ScrapeDeps.APIKeyFor != nil {
 			key = d.ScrapeDeps.APIKeyFor(d.DefaultProvider)
@@ -176,7 +188,10 @@ func handleCrawl(d Deps) func(context.Context, *sdk.CallToolRequest, CrawlIn) (*
 		}
 		res, err := crawl.Run(ctx, crawl.Options{
 			SeedURL: in.URL, Schema: sch, MaxPages: int(in.MaxPages), MaxDepth: int(in.MaxDepth),
-			SameHost: sameHost, Format: "jsonl", Out: os.DevNull, RunID: runID,
+			SameHost: sameHost, PathPrefix: in.PathPrefix,
+			Include: []string(in.Include), Exclude: []string(in.Exclude),
+			AllowSubdomains: allowSubdomains, NoSitemap: noSitemap,
+			Format: "jsonl", Out: os.DevNull, RunID: runID,
 			Provider: d.DefaultProvider, Model: d.DefaultModel, MaxCost: d.MaxCost,
 			DB: d.DB, Extractor: ex, Progress: progress,
 		})
@@ -216,6 +231,9 @@ func runUsage(info store.RunInfo) map[string]any {
 		"prompt_tokens":     info.PromptTokens,
 		"completion_tokens": info.CompletionTokens,
 		"usd_estimate":      info.USDEstimate,
+		"fetch_pages":       info.FetchPages,
+		"fetch_bytes":       info.FetchBytes,
+		"fetch_ms":          info.FetchMs,
 	}
 }
 

@@ -335,3 +335,27 @@ func TestRun_QualityNoCacheWrite(t *testing.T) {
 		t.Errorf("GetSelectors = (%v, %v), want not-found", ok, gerr)
 	}
 }
+
+// TestScrape_LogFetchCounters (Phase D): one markdown-only scrape lands
+// exactly one fetch row of the served body's length on the run record.
+func TestScrape_LogFetchCounters(t *testing.T) {
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openScrapeDB(t)
+	res, err := scrape.Run(context.Background(), fakeDeps(db, fx, ""), scrapeOrigin(t, scrapeHTML), scrape.Options{Render: "static"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	info, err := db.GetRun(res.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.FetchPages != 1 {
+		t.Errorf("fetch_pages = %d, want 1", info.FetchPages)
+	}
+	if info.FetchBytes != int64(len(scrapeHTML)) {
+		t.Errorf("fetch_bytes = %d, want %d (deterministic fixture)", info.FetchBytes, len(scrapeHTML))
+	}
+	if info.FetchMs < 0 {
+		t.Errorf("fetch_ms = %d, want ≥0", info.FetchMs)
+	}
+}

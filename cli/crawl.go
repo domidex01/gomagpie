@@ -11,6 +11,7 @@ import (
 
 	"gomagpie/crawl"
 	"gomagpie/extract"
+	"gomagpie/fetch"
 	pluginExec "gomagpie/plugin/exec"
 	"gomagpie/store"
 
@@ -24,6 +25,9 @@ func newCrawlCmd() *cobra.Command {
 	var rate float64
 	var ignoreRobots bool
 	var provider, model, exporterCmd string
+	var pathPrefix string
+	var include, exclude []string
+	var allowSubdomains, noSitemap bool
 	cmd := &cobra.Command{
 		Use:   "crawl <url>",
 		Short: "BFS crawl + extract a site",
@@ -34,6 +38,8 @@ func newCrawlCmd() *cobra.Command {
 				MaxPages: maxPages, MaxDepth: maxDepth, Concurrency: concurrency,
 				SameHost: sameHost, Rate: rate, IgnoreRobots: ignoreRobots,
 				Provider: provider, Model: model, ExporterCmd: exporterCmd,
+				PathPrefix: pathPrefix, Include: include, Exclude: exclude,
+				AllowSubdomains: allowSubdomains, NoSitemap: noSitemap,
 			})
 		},
 	}
@@ -45,6 +51,11 @@ func newCrawlCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxDepth, "max-depth", 3, "max link depth from seed")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 8, "fetch workers")
 	cmd.Flags().BoolVar(&sameHost, "same-host", true, "follow only same-host links")
+	cmd.Flags().StringVar(&pathPrefix, "path-prefix", "", "only follow links under this path prefix")
+	cmd.Flags().StringSliceVar(&include, "include", nil, "comma-separated URL globs to include, e.g. '**/docs/**' (** crosses /, * stays in one segment)")
+	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "comma-separated URL globs to exclude (wins over --include)")
+	cmd.Flags().BoolVar(&allowSubdomains, "allow-subdomains", false, "follow links into subdomains of the seed host")
+	cmd.Flags().BoolVar(&noSitemap, "no-sitemap", false, "skip sitemap seed expansion")
 	cmd.Flags().Float64Var(&rate, "rate", 1, "per-host requests/sec")
 	cmd.Flags().BoolVar(&ignoreRobots, "ignore-robots", false, "fetch despite robots.txt (prints a warning)")
 	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp)
@@ -68,12 +79,22 @@ type crawlCLIOptions struct {
 	Provider     string
 	Model        string
 	ExporterCmd  string
+	// Scope bounds; globs validated pre-I/O via the same CompileScope Run uses.
+	PathPrefix      string
+	Include         []string
+	Exclude         []string
+	AllowSubdomains bool
+	NoSitemap       bool
 }
 
 func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	cfg, err := resolveConfig()
 	if err != nil {
 		return err
+	}
+	// Scope globs fail before any I/O (same pure function crawl.Run uses).
+	if _, err := crawl.CompileScope(o.SameHost, o.AllowSubdomains, o.PathPrefix, o.Include, o.Exclude); err != nil {
+		return fail(2, "%v", err)
 	}
 	if o.Schema != "" {
 		cfg.Schema = o.Schema
@@ -190,6 +211,8 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	res, err := crawl.Run(ctx, crawl.Options{
 		SeedURL: seedURL, Schema: sch, MaxPages: o.MaxPages, MaxDepth: o.MaxDepth,
 		SameHost: o.SameHost, FetchWorkers: o.Concurrency, Rate: o.Rate,
+		PathPrefix: o.PathPrefix, Include: o.Include, Exclude: o.Exclude,
+		AllowSubdomains: o.AllowSubdomains, NoSitemap: o.NoSitemap,
 		Format: cfg.Format, Out: cfg.Out, RunID: runID,
 		Resume: resuming, ResumeID: o.Resume, IgnoreRobots: o.IgnoreRobots,
 		Provider: provider, Model: model, MaxCost: cfg.MaxCost,
@@ -210,6 +233,8 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 			return fail(5, "crawl: %v", err)
 		case errors.Is(err, crawl.ErrCostCeiling):
 			return fail(6, "crawl: %v", err)
+		case errors.Is(err, fetch.ErrPrivateAddress):
+			return fail(2, "crawl: %v", err)
 		}
 		return err
 	}

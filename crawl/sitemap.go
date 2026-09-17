@@ -5,10 +5,12 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	"gomagpie/clean"
 	"gomagpie/fetch"
@@ -19,19 +21,29 @@ import (
 
 // Sitemap caps: an index may legally list 50k sitemaps of 50k URLs each,
 // so map follows ≤100 children and returns ≤10k URLs with truncated set
-// past either cap. Deeper recursion and partial-on-budget stay Phase D.
+// past either cap, recursion bounded at depth 5, all under a 25s internal
+// budget (partial results beat timeout drops).
 const (
 	maxSitemapChildren = 100
 	maxSitemapURLs     = 10000
+	maxSitemapDepth    = 5
 )
 
-// ListSitemapURLs returns robots-declared sitemap URLs for siteURL's host:
-// robots.txt is fetched through the Fetcher seam (never Checker — Checker
-// dials live HTTP, which hermetic callers cannot inject), each body is
-// gunzipped on 0x1f8b sniff, and one sitemapindex level is followed.
-// A missing/unfetchable robots.txt falls back to /sitemap.xml; anything
-// else (bad seed fetch, non-2xx, garbage XML) is a hard error naming the
-// URL. Results dedupe preserving first-seen order.
+// sitemapBudget is a var only so tests can inject a short budget; the
+// production value is 25s.
+var sitemapBudget = 25 * time.Second
+
+var errSitemapBudget = errors.New("crawl: map: sitemap budget exceeded")
+
+// ListSitemapURLs returns page URLs listed by siteURL's sitemaps:
+// robots.txt seeds (grobotstxt ∪ a tolerant fallback scanner, missing
+// robots falls back to /sitemap.xml), then a budgeted BFS over sitemap
+// documents — indexes recursed to depth 5, urlsets' <loc> entries
+// collected. Child fetch/parse failures are skipped (truncated:true),
+// never fatal; the only hard errors are a bad site URL and a totally
+// empty result when at least one error occurred. Budget expiry returns
+// the partial list with truncated:true and nil error; a canceled parent
+// context returns the context error.
 func ListSitemapURLs(ctx context.Context, f vertical.Fetcher, siteURL string) ([]string, bool, error) {
 	if f == nil {
 		static, err := fetch.NewStaticFetcher()
@@ -49,67 +61,103 @@ func ListSitemapURLs(ctx context.Context, f vertical.Fetcher, siteURL string) ([
 	if err != nil {
 		return nil, false, err
 	}
+	bctx, cancel := context.WithTimeoutCause(ctx, sitemapBudget, errSitemapBudget)
+	defer cancel()
+
 	var locs []string
 	seen := map[string]bool{}
-	add := func(locs []string, raw string) []string {
+	visited := map[string]bool{}
+	firstErr := error(nil)
+	truncated := false
+	children := 0 // non-seed document fetches, capped at maxSitemapChildren
+
+	add := func(raw string) {
 		if raw == "" || seen[raw] {
-			return locs
+			return
 		}
 		seen[raw] = true
-		return append(locs, raw)
+		locs = append(locs, raw)
 	}
-	truncated := false
-	followed := 0
-	for _, seed := range seeds {
-		if len(locs) >= maxSitemapURLs {
-			return locs, true, nil
+
+	type node struct {
+		url   string
+		depth int
+	}
+	queue := make([]node, 0, len(seeds))
+	for _, s := range seeds {
+		queue = append(queue, node{url: s, depth: 0})
+	}
+	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err // parent cancel/expiry: surface the parent error
 		}
-		body, err := fetchBody(ctx, f, seed)
+		if bctx.Err() != nil {
+			return locs, true, nil // our own budget: partial results, no error
+		}
+		cur := queue[0]
+		queue = queue[1:]
+		if visited[cur.url] || cur.depth > maxSitemapDepth {
+			truncated = true
+			continue
+		}
+		visited[cur.url] = true
+		if cur.depth > 0 {
+			if children >= maxSitemapChildren {
+				truncated = true
+				continue
+			}
+			children++
+		}
+		body, err := fetchBody(bctx, f, cur.url)
 		if err != nil {
-			return nil, false, err
+			if ctx.Err() != nil {
+				return nil, false, ctx.Err()
+			}
+			if bctx.Err() != nil {
+				return locs, true, nil
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			truncated = true
+			continue
+		}
+		// A fetch that lands past the budget is discarded: stop-now
+		// semantics, partial results win.
+		if bctx.Err() != nil {
+			return locs, true, nil
 		}
 		if set, ok := parseURLSet(body); ok {
 			for _, l := range set {
-				locs = add(locs, clean.ResolveURL(seed, l))
+				add(clean.ResolveURL(cur.url, l))
 				if len(locs) >= maxSitemapURLs {
 					return locs, true, nil
 				}
 			}
 			continue
 		}
-		children, ok := parseIndex(body)
-		if !ok {
-			return nil, false, fmt.Errorf("crawl: map: %s is neither urlset nor sitemapindex", seed)
+		if children, ok := parseIndex(body); ok {
+			for _, child := range children {
+				queue = append(queue, node{url: clean.ResolveURL(cur.url, child), depth: cur.depth + 1})
+			}
+			continue
 		}
-		if len(children) > maxSitemapChildren-followed {
-			truncated = true
+		if firstErr == nil {
+			firstErr = fmt.Errorf("crawl: map: %s is neither urlset nor sitemapindex", cur.url)
 		}
-		for _, child := range children {
-			if followed >= maxSitemapChildren || len(locs) >= maxSitemapURLs {
-				return locs, true, nil
-			}
-			followed++
-			cbody, err := fetchBody(ctx, f, child)
-			if err != nil {
-				return nil, false, err
-			}
-			set, ok := parseURLSet(cbody)
-			if !ok {
-				return nil, false, fmt.Errorf("crawl: map: %s is not a urlset", child)
-			}
-			for _, l := range set {
-				locs = add(locs, clean.ResolveURL(child, l))
-				if len(locs) >= maxSitemapURLs {
-					return locs, true, nil
-				}
-			}
-		}
+		truncated = true
+	}
+	if len(locs) == 0 && firstErr != nil {
+		return nil, false, firstErr
 	}
 	return locs, truncated, nil
 }
 
-// robotSeeds fetches base/robots.txt through the seam and returns its
-// Sitemap: lines; a missing/unfetchable robots.txt falls back to
+// robotSeeds fetches base/robots.txt through the seam and returns the
+// union of grobotstxt's Sitemap: lines and a tolerant fallback scan
+// (case/leading-space/inline-comment tolerance verified by probe test,
+// not assumed). Relative seeds are absolutized against base. A
+// missing/unfetchable or sitemap-less robots.txt falls back to
 // base/sitemap.xml (the overwhelmingly common default).
 func robotSeeds(ctx context.Context, f vertical.Fetcher, base string) ([]string, error) {
 	robotsURL := base + "/robots.txt"
@@ -117,15 +165,51 @@ func robotSeeds(ctx context.Context, f vertical.Fetcher, base string) ([]string,
 	if err != nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return []string{base + "/sitemap.xml"}, nil
 	}
-	seeds := grobotstxt.Sitemaps(string(resp.HTML))
+	var seeds []string
+	seen := map[string]bool{}
+	add := func(v string) {
+		if v == "" || seen[v] {
+			return
+		}
+		seen[v] = true
+		seeds = append(seeds, v)
+	}
+	for _, s := range grobotstxt.Sitemaps(string(resp.HTML)) {
+		add(clean.ResolveURL(base, s))
+	}
+	for _, s := range fallbackSitemaps(string(resp.HTML)) {
+		add(clean.ResolveURL(base, s))
+	}
 	if len(seeds) == 0 {
 		return []string{base + "/sitemap.xml"}, nil
 	}
 	return seeds, nil
 }
 
-// fetchBody GETs one sitemap URL: non-2xx is a hard error naming the URL,
-// gzip is sniffed (0x1f8b), never trusted by extension.
+// fallbackSitemaps scans robots lines without a full parser: strip `#`
+// comments, trim space, match `sitemap:` case-insensitively. The belt to
+// grobotstxt's suspenders — kept regardless of the probe result.
+func fallbackSitemaps(body string) []string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		if i := strings.Index(line, "#"); i >= 0 {
+			line = line[:i]
+		}
+		field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(field), "sitemap") {
+			continue
+		}
+		if v := strings.TrimSpace(value); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// fetchBody GETs one sitemap URL: non-2xx is an error naming the URL
+// (skipped by the BFS, fatal only when nothing was listed at all), gzip
+// is sniffed (0x1f8b), never trusted by extension. Content-Encoding:
+// gzip responses arrive pre-decoded through the static fetcher.
 func fetchBody(ctx context.Context, f vertical.Fetcher, rawURL string) ([]byte, error) {
 	resp, err := f.Fetch(ctx, fetch.FetchRequest{URL: rawURL})
 	if err != nil {

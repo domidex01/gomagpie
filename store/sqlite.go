@@ -58,6 +58,9 @@ CREATE TABLE IF NOT EXISTS run_history (
     prompt_tokens     INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
     usd_estimate      REAL NOT NULL DEFAULT 0,
+    fetch_pages       INTEGER NOT NULL DEFAULT 0,
+    fetch_bytes       INTEGER NOT NULL DEFAULT 0,
+    fetch_ms          INTEGER NOT NULL DEFAULT 0,
     status            TEXT NOT NULL DEFAULT 'running'
 );
 
@@ -107,7 +110,54 @@ func Open(path string) (*DB, error) {
 		}
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
-	return &DB{db: db, path: path}, nil
+	wdb := &DB{db: db, path: path}
+	if err := wdb.migrateRunHistory(); err != nil {
+		_ = db.Close() //nolint:errcheck // error path; close failure would mask the real error
+		return nil, err
+	}
+	return wdb, nil
+}
+
+// fetchColumns are the Phase D telemetry columns; pre-D database files
+// gain them (zeroed) on open via PRAGMA table_info + ADD COLUMN.
+var fetchColumns = []struct{ name, def string }{
+	{"fetch_pages", "INTEGER NOT NULL DEFAULT 0"},
+	{"fetch_bytes", "INTEGER NOT NULL DEFAULT 0"},
+	{"fetch_ms", "INTEGER NOT NULL DEFAULT 0"},
+}
+
+func (d *DB) migrateRunHistory() error {
+	rows, err := d.db.Query(`PRAGMA table_info(run_history)`)
+	if err != nil {
+		return fmt.Errorf("store: migrate run_history: %w", err)
+	}
+	has := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dflt any
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			_ = rows.Close() //nolint:errcheck // read-only; close error unactionable
+			return fmt.Errorf("store: migrate run_history: %w", err)
+		}
+		has[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close() //nolint:errcheck // read-only; close error unactionable
+		return fmt.Errorf("store: migrate run_history: %w", err)
+	}
+	_ = rows.Close() //nolint:errcheck // read-only; close error unactionable
+	for _, col := range fetchColumns {
+		if has[col.name] {
+			continue
+		}
+		if _, err := d.db.Exec(`ALTER TABLE run_history ADD COLUMN ` + col.name + ` ` + col.def); err != nil {
+			return fmt.Errorf("store: migrate run_history: add %s: %w", col.name, err)
+		}
+	}
+	return nil
 }
 
 func sha256Hex(s string) string {
@@ -183,13 +233,17 @@ type RunInfo struct {
 	PromptTokens     int
 	CompletionTokens int
 	USDEstimate      float64
+	FetchPages       int64
+	FetchBytes       int64
+	FetchMs          int64
 }
 
 // GetRun reads a run_history status row; unknown ids error loudly.
 func (d *DB) GetRun(runID string) (RunInfo, error) {
 	var r RunInfo
-	err := d.db.QueryRow(`SELECT run_id, command, status, pages_ok, pages_err, prompt_tokens, completion_tokens, usd_estimate FROM run_history WHERE run_id=?`, runID).Scan(
-		&r.RunID, &r.Command, &r.Status, &r.PagesOK, &r.PagesErr, &r.PromptTokens, &r.CompletionTokens, &r.USDEstimate)
+	err := d.db.QueryRow(`SELECT run_id, command, status, pages_ok, pages_err, prompt_tokens, completion_tokens, usd_estimate, fetch_pages, fetch_bytes, fetch_ms FROM run_history WHERE run_id=?`, runID).Scan(
+		&r.RunID, &r.Command, &r.Status, &r.PagesOK, &r.PagesErr, &r.PromptTokens, &r.CompletionTokens, &r.USDEstimate,
+		&r.FetchPages, &r.FetchBytes, &r.FetchMs)
 	if err == sql.ErrNoRows {
 		return RunInfo{}, fmt.Errorf("store: unknown run_id %q", runID)
 	}
@@ -197,6 +251,17 @@ func (d *DB) GetRun(runID string) (RunInfo, error) {
 		return RunInfo{}, fmt.Errorf("store: get run: %w", err)
 	}
 	return r, nil
+}
+
+// LogFetch accumulates one successful page fetch (bytes, milliseconds)
+// into the run row, so cost and volume questions have one answer.
+func (d *DB) LogFetch(runID string, nBytes, ms int64) error {
+	_, err := d.db.Exec(`UPDATE run_history SET fetch_pages=fetch_pages+1, fetch_bytes=fetch_bytes+?, fetch_ms=fetch_ms+? WHERE run_id=?`,
+		nBytes, ms, runID)
+	if err != nil {
+		return fmt.Errorf("store: log fetch: %w", err)
+	}
+	return nil
 }
 
 // RunCost returns the accumulated usd_estimate for a run.

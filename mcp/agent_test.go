@@ -771,3 +771,72 @@ func TestStringArgs_E2E(t *testing.T) {
 		t.Errorf("pages_crawled = %v, want 2 (string max_pages coerced)", out3["pages_crawled"])
 	}
 }
+
+// --- Phase D additions: crawl_site scope fields + fetch telemetry in
+// usage. Coercion lives at this layer; the SEMANTICS of the scope flags
+// (which links survive) are locked by crawl/scope_test.go — crawl.Run has
+// no fetcher seam, so honoring subdomains e2e here would mean dialing a
+// fabricated subdomain; the coercion + wiring is what this layer owns.
+
+func TestCrawlSite_ScopeFieldsCoerce(t *testing.T) {
+	db := openMCPDB(t)
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	deps := agentDeps(db, fx, nil, &fakeAgentFetcher{bodies: map[string]fakeAgentResp{}})
+	deps.ScrapeDeps.Fetcher = nil // live localhost: nil falls back to the static fetcher
+	cs := dialInMemory(t, magpiemcp.NewServer(deps), nil)
+
+	// ALL stringy shapes coerce through the real transport: string bools,
+	// string max_pages, JSON-array-string globs.
+	out := decodeOut(t, callTool(t, cs, "crawl_site", map[string]any{
+		"url":              origin3Pages(t),
+		"max_pages":        "3",
+		"max_depth":        "1",
+		"same_host":        "true",
+		"allow_subdomains": "true",
+		"no_sitemap":       "true",
+		"path_prefix":      "/",
+		"include":          `["**"]`,
+		"exclude":          `["**/*.pdf"]`,
+	}, ""))
+	if out["pages_crawled"].(float64) != 3 {
+		t.Errorf("pages_crawled = %v, want 3 (stringy scope fields coerced and honored)", out["pages_crawled"])
+	}
+}
+
+func TestCrawlSite_UsageHasFetchCounters(t *testing.T) {
+	db := openMCPDB(t)
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	deps := agentDeps(db, fx, nil, &fakeAgentFetcher{bodies: map[string]fakeAgentResp{}})
+	deps.ScrapeDeps.Fetcher = nil
+	cs := dialInMemory(t, magpiemcp.NewServer(deps), nil)
+
+	out := decodeOut(t, callTool(t, cs, "crawl_site", map[string]any{
+		"url": origin3Pages(t), "max_pages": "3",
+	}, ""))
+	usage, ok := out["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("usage missing from crawl_site out: %v", out)
+	}
+	for _, k := range []string{"fetch_pages", "fetch_bytes", "fetch_ms"} {
+		v, ok := usage[k].(float64)
+		if !ok {
+			t.Errorf("usage[%q] missing or not a number: %v", k, usage[k])
+			continue
+		}
+		if k == "fetch_pages" && v < 1 {
+			t.Errorf("fetch_pages = %v, want ≥1 after a real crawl", usage[k])
+		}
+	}
+	// Status poll shares the same usage shape.
+	runID, _ := out["run_id"].(string)
+	out2 := decodeOut(t, callTool(t, cs, "crawl_site", map[string]any{"run_id": runID}, ""))
+	usage2, ok := out2["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("status usage missing: %v", out2)
+	}
+	for _, k := range []string{"fetch_pages", "fetch_bytes", "fetch_ms"} {
+		if _, ok := usage2[k].(float64); !ok {
+			t.Errorf("status usage[%q] missing or not a number: %v", k, usage2[k])
+		}
+	}
+}

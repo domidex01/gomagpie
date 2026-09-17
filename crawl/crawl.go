@@ -45,6 +45,12 @@ type Options struct {
 	Model        string
 	MaxCost      float64
 	DB           *store.DB
+	// Scope bounds (compiled once in Run; bad globs fail pre-I/O).
+	PathPrefix      string
+	Include         []string
+	Exclude         []string
+	AllowSubdomains bool
+	NoSitemap       bool // skip sitemap seed expansion
 	// Progress is called once per done/errored page from the sink goroutine
 	// (nil = off). Total is intentionally omitted: the frontier total is
 	// unknowable upfront.
@@ -105,6 +111,11 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	schemaHash := selector.SchemaHash(opts.Schema)
 	required := requiredFields(opts.Schema)
+	// Compile the frontier scope once; a bad glob fails before any I/O.
+	scope, err := CompileScope(opts.SameHost, opts.AllowSubdomains, opts.PathPrefix, opts.Include, opts.Exclude)
+	if err != nil {
+		return Result{}, err
+	}
 
 	db := opts.DB
 	runID := opts.RunID
@@ -149,7 +160,13 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	frontier := NewFrontier(db, filter, runID)
 
-	// Seed (fresh runs only), robots-checked first.
+	staticFetcher, err := fetch.NewStaticFetcher()
+	if err != nil {
+		return Result{}, err
+	}
+
+	// Seed (fresh runs only), robots-checked first; sitemap expansion is
+	// best-effort and never fails the crawl.
 	if !opts.Resume {
 		seedHost, herr := hostOf(opts.SeedURL)
 		if herr != nil {
@@ -168,8 +185,20 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			}
 		}
 		seeds := []string{opts.SeedURL}
-		if isHTTP(opts.SeedURL) {
-			seeds = append(seeds, checker.Sitemaps(ctx, opts.SeedURL)...)
+		if isHTTP(opts.SeedURL) && !opts.NoSitemap {
+			// Expand the seed through the sitemap (page URLs, capped at
+			// maxPages) instead of enqueuing raw sitemap-XML URLs. Expansion
+			// NEVER fails the crawl: warn and proceed seed-only — a site
+			// without robots.txt/sitemap.xml crawls exactly as before.
+			expanded, _, serr := ListSitemapURLs(ctx, staticFetcher, opts.SeedURL)
+			if serr != nil {
+				fmt.Fprintf(os.Stderr, "crawl: sitemap expansion: %v; continuing seed-only\n", serr)
+			} else {
+				if len(expanded) > maxPages {
+					expanded = expanded[:maxPages]
+				}
+				seeds = append(seeds, scopeFilterExpansion(scope, opts.SeedURL, expanded)...)
+			}
 		}
 		n, err := frontier.Add(seeds, 0)
 		if err != nil {
@@ -220,10 +249,6 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 	}()
 
-	staticFetcher, err := fetch.NewStaticFetcher()
-	if err != nil {
-		return Result{}, err
-	}
 	gate := core.NewBrowserGate(2)
 
 	domains := map[string]*domainState{}
@@ -278,6 +303,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			}
 		}
 		var last *fetch.FetchResponse
+		fetchStart := time.Now()
 		resp, err := FetchWithRetry(ctx, func() (*fetch.FetchResponse, error) {
 			r, ferr := staticFetcher.Fetch(ctx, fetch.FetchRequest{URL: task.URL})
 			// Reset on transport failure: qualityErr must classify the
@@ -313,6 +339,11 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			}
 			resp = bresp
 		}
+		// Fetch telemetry rides the run row next to LLM usage. Warn-only:
+		// a logging failure must never fail the page.
+		if lerr := db.LogFetch(runID, int64(len(resp.HTML)), time.Since(fetchStart).Milliseconds()); lerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: log fetch: %v\n", lerr)
+		}
 		return core.FetchedPage{Task: task, Resp: resp}, nil
 	}
 
@@ -327,7 +358,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 		sidecar := clean.HarvestSidecar(html)
 		// Link extraction ALWAYS (nav links live in boilerplate).
-		if links, err := frontier.ExtractLinks(html, finalURL, page.Task.Depth, maxDepth, opts.SameHost); err == nil && links > 0 {
+		if links, err := frontier.ExtractLinks(html, finalURL, page.Task.Depth, maxDepth, scope); err == nil && links > 0 {
 			outstanding.Add(int64(links))
 		}
 		// Trafilatura only when the page will need an LLM.
@@ -555,6 +586,32 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{RunID: runID}, ferr
 	}
 	return Result{RunID: runID, PagesOK: done, PagesErr: errs, Records: w.count()}, nil
+}
+
+// scopeFilterExpansion keeps only in-scope sitemap-expanded URLs (the
+// seed itself is always kept by the caller — the operator chose it).
+// Sitemaps list the whole site, so without this filter --path-prefix
+// would burn the --max-pages budget on out-of-scope URLs.
+func scopeFilterExpansion(scope Scope, seedURL string, expanded []string) []string {
+	seedU, err := url.Parse(seedURL)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, raw := range expanded {
+		c, cerr := Canonicalize(raw)
+		if cerr != nil {
+			continue
+		}
+		cu, perr := url.Parse(c)
+		if perr != nil {
+			continue
+		}
+		if scope.Allows(seedU, cu) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // healField re-synthesizes triggered fields only (full template when ≥50%

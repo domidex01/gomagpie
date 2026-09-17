@@ -13,6 +13,7 @@ import (
 	"gomagpie/config"
 	"gomagpie/crawl"
 	"gomagpie/extract"
+	"gomagpie/fetch"
 	"gomagpie/scrape"
 	"gomagpie/store"
 	"gomagpie/vertical"
@@ -93,7 +94,8 @@ func newZenExtractor(provider, key, model string, sch *extract.Schema, log func(
 
 // scrapeExit maps shared pipeline errors to exit codes, mirroring the
 // runScrape switch: missing key → 7, cost ceiling → 6, quality → 8,
-// vertical mismatch → 2. One home so new commands cannot drift.
+// vertical mismatch → 2, non-public address → 2. One home so new
+// commands cannot drift.
 func scrapeExit(err error, rawURL, provider string) error {
 	switch {
 	case errors.Is(err, scrape.ErrMissingKey):
@@ -103,6 +105,8 @@ func scrapeExit(err error, rawURL, provider string) error {
 	case errors.Is(err, clean.ErrQuality):
 		return fail(8, "%s", qualityMessage(err, rawURL))
 	case errors.Is(err, vertical.ErrURLMismatch):
+		return fail(2, "%s", err.Error())
+	case errors.Is(err, fetch.ErrPrivateAddress):
 		return fail(2, "%s", err.Error())
 	}
 	return err

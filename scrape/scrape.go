@@ -123,7 +123,19 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		}
 		vf = static
 	}
-	page, err := fetchURL(ctx, vf, rawURL, render, o.Profile, o.Cookies)
+	page, err := func() (*fetch.FetchResponse, error) {
+		start := time.Now()
+		p, ferr := fetchURL(ctx, vf, rawURL, render, o.Profile, o.Cookies)
+		if ferr != nil {
+			return nil, ferr
+		}
+		// Fetch telemetry rides the run row next to LLM usage; warn-only,
+		// never fails the page.
+		if lerr := d.DB.LogFetch(runID, int64(len(p.HTML)), time.Since(start).Milliseconds()); lerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: log fetch: %v\n", lerr)
+		}
+		return p, nil
+	}()
 	if err != nil {
 		finish(0, 1, "error")
 		return Result{}, err
