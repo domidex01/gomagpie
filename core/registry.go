@@ -9,8 +9,12 @@
 // Resolving that "properly" (DTO types in core + adapters everywhere) is
 // scaffolding for consumers that don't exist: exactly one implementation
 // per kind ships. Kind-specific Go interfaces live at their single use
-// site (plugin/exec.Exporter, plugin/wasm.Runner); promote one into core
-// when a second consumer per kind appears (rule of three).
+// site (plugin/exec.Exporter, plugin/wasm.Runner); when a second consumer
+// per kind appears, replace the kind strings with flyscrape-style
+// capability interfaces (one per behavior: TransportAdapter,
+// ResponseReceiver, ... discovered via a type-switch over the module
+// value) — the interfaces live in core and modules import core, so the
+// registration cycle never reappears.
 package core
 
 import (
