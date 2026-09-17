@@ -77,11 +77,20 @@ type Result struct {
 	Vertical string `json:",omitempty"`
 }
 
-// Run fetches, cleans, and optionally extracts one URL.
-func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) {
-	if d.DB == nil {
-		return Result{}, fmt.Errorf("scrape: nil DB")
-	}
+// OptionsError marks a pre-I/O options validation failure (CLI exit 2).
+// Callers match it with errors.As; the message text is API surface
+// (crosses the MCP boundary to agents) — change only with a declared
+// message change.
+type OptionsError struct{ msg string }
+
+func (e *OptionsError) Error() string { return e.msg }
+
+// ValidateOptions checks Render, PageFormat, Browser, and Vertical before
+// any I/O. One switch site, shared by Run (which calls it first), the CLI
+// commands, and batch — adding an option edits this function, not four
+// validators. The trust boundary stays in this package: callers map the
+// typed error (exit 2) but never re-implement the checks.
+func ValidateOptions(o Options) error {
 	render := o.Render
 	if render == "" {
 		render = "auto"
@@ -89,26 +98,36 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	switch render {
 	case "auto", "static", "browser":
 	default:
-		return Result{}, fmt.Errorf("scrape: render %q must be auto|static|browser", render)
+		return &OptionsError{fmt.Sprintf("scrape: render %q must be auto|static|browser", render)}
 	}
-	// Validate before any I/O: a bogus format must not cost a fetch+clean.
 	switch o.PageFormat {
 	case "", "markdown", "llm", "text", "json":
 	default:
-		return Result{}, fmt.Errorf("scrape: page format %q must be markdown|llm|text|json", o.PageFormat)
+		return &OptionsError{fmt.Sprintf("scrape: page format %q must be markdown|llm|text|json", o.PageFormat)}
 	}
-	// Same for the browser fingerprint: reject before any socket opens.
 	if !fetch.ValidBrowser(o.Browser) {
-		return Result{}, fmt.Errorf("scrape: browser %q must be chrome|firefox|random", o.Browser)
+		return &OptionsError{fmt.Sprintf("scrape: browser %q must be chrome|firefox|random", o.Browser)}
 	}
-	// Unknown vertical names fail before any I/O, like a bogus page format.
-	// The resolved extractor rides along for the dispatch below — one Lookup.
+	if o.Vertical != "" && o.Vertical != "auto" {
+		if _, ok := vertical.Lookup(o.Vertical); !ok {
+			return &OptionsError{fmt.Sprintf("scrape: vertical %q unknown (see `magpie vertical --list`)", o.Vertical)}
+		}
+	}
+	return nil
+}
+
+// Run fetches, cleans, and optionally extracts one URL.
+func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) {
+	if d.DB == nil {
+		return Result{}, fmt.Errorf("scrape: nil DB")
+	}
+	if err := ValidateOptions(o); err != nil {
+		return Result{}, err
+	}
+	// ValidateOptions guaranteed the name; resolve the extractor for dispatch.
 	var explicit *vertical.Extractor
 	if o.Vertical != "" && o.Vertical != "auto" {
-		ex, ok := vertical.Lookup(o.Vertical)
-		if !ok {
-			return Result{}, fmt.Errorf("scrape: vertical %q unknown (see `magpie vertical --list`)", o.Vertical)
-		}
+		ex, _ := vertical.Lookup(o.Vertical)
 		explicit = &ex
 	}
 
@@ -132,6 +151,10 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		vf = static
 	}
 	fetchStart := time.Now()
+	render := o.Render
+	if render == "" {
+		render = "auto" // same default ValidateOptions validated
+	}
 	page, err := fetchURL(ctx, vf, rawURL, render, o.Profile, o.Cookies, o.Browser)
 	if err != nil {
 		finish(0, 1, "error")
