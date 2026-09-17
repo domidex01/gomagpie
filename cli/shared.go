@@ -3,13 +3,19 @@ package cli
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"gomagpie/clean"
+	"gomagpie/config"
+	"gomagpie/crawl"
 	"gomagpie/extract"
+	"gomagpie/scrape"
 	"gomagpie/store"
+	"gomagpie/vertical"
 )
 
 // ProviderHelp is the single home for the --provider value list, shared by
@@ -83,6 +89,38 @@ func newZenExtractor(provider, key, model string, sch *extract.Schema, log func(
 	a := extract.NewOpenAI(base, key, model, sch)
 	a.Provider, a.SessionID, a.ExtraHeaders, a.Log = provider, runID, headers, log
 	return a, nil
+}
+
+// scrapeExit maps shared pipeline errors to exit codes, mirroring the
+// runScrape switch: missing key → 7, cost ceiling → 6, quality → 8,
+// vertical mismatch → 2. One home so new commands cannot drift.
+func scrapeExit(err error, rawURL, provider string) error {
+	switch {
+	case errors.Is(err, scrape.ErrMissingKey):
+		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
+	case errors.Is(err, crawl.ErrCostCeiling):
+		return fail(6, "cost ceiling exceeded: %v", err)
+	case errors.Is(err, clean.ErrQuality):
+		return fail(8, "%s", qualityMessage(err, rawURL))
+	case errors.Is(err, vertical.ErrURLMismatch):
+		return fail(2, "%s", err.Error())
+	}
+	return err
+}
+
+// autoProviders filters scrape.AutoProviderOrder to usable providers:
+// keyed entries need a configured key, keyless (ollama/codex) always
+// qualify. The canonical order lives in scrape (Summarize needs it too);
+// this is the CLI view over the same list.
+func autoProviders(cfg config.Config) []string {
+	var out []string
+	for _, p := range scrape.AutoProviderOrder {
+		if needsAPIKey(p) && cfg.APIKey(p) == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // checkCostCeiling fails closed: an unknown running total aborts before any

@@ -47,13 +47,19 @@ Zen `/responses`-only models are unsupported (different API shape).
 | Command | Action |
 | :-- | :-- |
 | `magpie scrape <url> [--schema f] [--render auto\|static\|browser] [--provider …] [--model …] [--format json\|jsonl] [--max-cost usd] [--out f]` | Fetch → clean → extract one URL |
-| `magpie extract [--schema f] [--content-type html\|markdown]` | Extract from stdin/file, no fetch |
+| `magpie extract [--schema f \| --prompt t] [--content-type html\|markdown]` | Extract from stdin/file, no fetch (prompt = plain text, no schema) |
+| `magpie batch [urls...] [--file f] [--concurrency 8] [--format jsonl\|json]` | Scrape ≤100 URLs, one ok/error record each (markdown only) |
+| `magpie map <site> [--format lines\|json]` | List sitemap-derived URLs |
+| `magpie summarize <url> [--max-sentences 3] [--provider …]` | Summarize in ≤N sentences |
+| `magpie diff <url> --against <file>` | Word-level diff vs a markdown snapshot |
+| `magpie brand <url>` | Brand colors, fonts, logo, favicon (zero LLM) |
+| `magpie vertical [--list] [<url> --name]` | Zero-LLM typed extraction |
 | `magpie crawl <url> --schema f [--exporter-cmd prog]` | BFS crawl + extract; tee records as JSONL to prog's stdin |
 | `magpie serve [--transport stdio\|http] [--addr :8080]` | Serve the pipeline over MCP |
 | `magpie build --with module@version --output f` | Compile a custom static binary with extra modules |
 | `magpie config set-key <provider> \| show` | Store key in OS keyring / show redacted config |
 
-Exit codes: 0 ok · 1 runtime · 2 usage · 3 all-failed · 6 cost ceiling · 7 credentials.
+Exit codes: 0 ok · 1 runtime · 2 usage · 3 all-failed · 6 cost ceiling · 7 credentials · 8 quality-blocked.
 
 ## Checks
 
@@ -84,8 +90,15 @@ Claude Desktop config (`{ "mcpServers": { "gomagpie": {
 | :-- | :-- |
 | `scrape_url` | Fetch → clean → extract one URL (schema optional) |
 | `crawl_site` | Crawl a site, or poll a previous run via `run_id` (with progress) |
-| `extract_structured` | Extract from HTML/markdown, no fetch |
+| `extract_structured` | Extract from HTML/markdown, no fetch (schema) or plain text (prompt) |
 | `get_cached_selectors` | List cached selectors for a domain |
+| `batch` | Scrape ≤100 URLs with bounded concurrency (markdown only, zero LLM) |
+| `map` | List sitemap-derived URLs for a site |
+| `summarize` | Summarize one URL in ≤N sentences |
+| `diff` | Word-level diff of a URL vs a previous snapshot |
+| `brand` | Brand colors, fonts, logo, favicon (zero LLM) |
+| `list_extractors` | List zero-LLM vertical extractors |
+| `vertical_scrape` | Extract one URL with a named vertical (zero LLM) |
 
 HTTP mode: `magpie serve --transport http --addr 127.0.0.1:8089`.
 Details: `magpie serve --help`.

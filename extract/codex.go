@@ -77,6 +77,13 @@ func (c *CodexExecAdapter) Extract(ctx context.Context, in ExtractInput) (Extrac
 	return runRepairLoop(ctx, call, c.Log, in, "codex", c.Model)
 }
 
+// PromptText is the schema-less text path: codex exec without
+// --output-schema, so -o captures the plain-text final message.
+// See Prompter for the caller-logs attribution contract.
+func (c *CodexExecAdapter) PromptText(ctx context.Context, system, user string) (string, TokenUsage, error) {
+	return c.runOnce(ctx, system, user, nil)
+}
+
 func (c *CodexExecAdapter) runOnce(ctx context.Context, system, user string, doc any) (string, TokenUsage, error) {
 	bin, err := c.bin()
 	if err != nil {
@@ -87,22 +94,27 @@ func (c *CodexExecAdapter) runOnce(ctx context.Context, system, user string, doc
 		return "", TokenUsage{}, fmt.Errorf("extract: codex temp dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }() //nolint:errcheck // best-effort temp cleanup
-	schemaRaw, err := json.Marshal(doc)
-	if err != nil {
-		return "", TokenUsage{}, fmt.Errorf("extract: marshal schema: %w", err)
-	}
 	schemaFile := filepath.Join(dir, "schema.json")
-	if err := os.WriteFile(schemaFile, schemaRaw, 0o600); err != nil {
-		return "", TokenUsage{}, fmt.Errorf("extract: write schema: %w", err)
+	if doc != nil {
+		schemaRaw, err := json.Marshal(doc)
+		if err != nil {
+			return "", TokenUsage{}, fmt.Errorf("extract: marshal schema: %w", err)
+		}
+		if err := os.WriteFile(schemaFile, schemaRaw, 0o600); err != nil {
+			return "", TokenUsage{}, fmt.Errorf("extract: write schema: %w", err)
+		}
 	}
 	outFile := filepath.Join(dir, "final.json")
 	// The prompt travels via stdin; only the schema needs a file (the CLI reads it).	// --ephemeral scopes the cumulative turn.completed usage to this call;
 	// --ignore-user-config keeps MCP servers/tools in the user config from
 	// silently dropping the strict schema (codex issue #15451).
-	cmd := exec.CommandContext(ctx, bin, "exec",
-		"--json", "--output-schema", schemaFile,
-		"--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
+	args := []string{"exec", "--json"}
+	if doc != nil {
+		args = append(args, "--output-schema", schemaFile)
+	}
+	args = append(args, "--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
 		"-o", outFile, "-m", c.Model, "-")
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = strings.NewReader(system + "\n\n" + user)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

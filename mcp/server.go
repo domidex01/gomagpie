@@ -1,6 +1,7 @@
-// Package mcp exposes the Phase 1–2 pipeline as an MCP server:
-// `magpie serve` registers scrape_url, crawl_site, extract_structured and
-// get_cached_selectors. Handlers share scrape.Run / crawl.Run with the CLI;
+// Package mcp exposes the pipeline as an MCP server: scrape_url,
+// crawl_site, extract_structured, get_cached_selectors plus the Phase C
+// agent surface (batch, map, summarize, diff, brand, list_extractors,
+// vertical_scrape). Handlers share scrape.Run / crawl.Run with the CLI;
 // the transport (stdio vs Streamable HTTP) is chosen in cli/serve.go.
 package mcp
 
@@ -22,12 +23,22 @@ type Deps struct {
 	MaxCost         float64
 }
 
-// NewServer registers the four tools on a fresh server.
+// NewServer registers the eleven tools on a fresh server. Every tool goes
+// through widenedTool (schema inferred from In exactly as before, then
+// widened for stringy clients) — never bare sdk.Tool literals, so a new
+// tool cannot silently miss coercion.
 func NewServer(d Deps) *sdk.Server {
 	server := sdk.NewServer(&sdk.Implementation{Name: "gomagpie", Version: "v1.0.0"}, nil)
-	sdk.AddTool(server, &sdk.Tool{Name: "scrape_url", Description: "Fetch, clean and extract one URL"}, handleScrape(d))
-	sdk.AddTool(server, &sdk.Tool{Name: "crawl_site", Description: "Crawl a site (synchronous) or poll a previous run by run_id"}, handleCrawl(d))
-	sdk.AddTool(server, &sdk.Tool{Name: "extract_structured", Description: "Extract structured data from HTML or markdown (no fetch)"}, handleExtract(d))
-	sdk.AddTool(server, &sdk.Tool{Name: "get_cached_selectors", Description: "List cached selectors for a domain"}, handleSelectors(d))
+	sdk.AddTool(server, widenedTool[ScrapeIn]("scrape_url", "Fetch, clean and extract one URL"), handleScrape(d))
+	sdk.AddTool(server, widenedTool[CrawlIn]("crawl_site", "Crawl a site (synchronous) or poll a previous run by run_id"), handleCrawl(d))
+	sdk.AddTool(server, widenedTool[ExtractIn]("extract_structured", "Extract structured data from HTML or markdown (no fetch)"), handleExtract(d))
+	sdk.AddTool(server, widenedTool[SelectorsIn]("get_cached_selectors", "List cached selectors for a domain"), handleSelectors(d))
+	sdk.AddTool(server, widenedTool[BatchIn]("batch", "Scrape up to 100 URLs with bounded concurrency (markdown only, zero LLM)"), handleBatch(d))
+	sdk.AddTool(server, widenedTool[MapIn]("map", "List sitemap-derived URLs for a site"), handleMap(d))
+	sdk.AddTool(server, widenedTool[SummarizeIn]("summarize", "Summarize one URL in at most N sentences"), handleSummarize(d))
+	sdk.AddTool(server, widenedTool[DiffIn]("diff", "Word-level diff of a URL against a previous markdown snapshot"), handleDiff(d))
+	sdk.AddTool(server, widenedTool[BrandIn]("brand", "Extract brand colors, fonts, logo and favicon (zero LLM)"), handleBrand(d))
+	sdk.AddTool(server, widenedTool[ListExtractorsIn]("list_extractors", "List zero-LLM vertical extractors"), handleListExtractors(d))
+	sdk.AddTool(server, widenedTool[VerticalScrapeIn]("vertical_scrape", "Extract one URL with a named vertical extractor (zero LLM)"), handleVertical(d))
 	return server
 }

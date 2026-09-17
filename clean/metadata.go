@@ -60,7 +60,7 @@ func HarvestMetadata(html []byte, pageURL string, markdown string) Metadata {
 	m.SiteName = meta("property", "og:site_name")
 	m.Image = meta("property", "og:image")
 	if href, ok := doc.Find(`link[rel~="icon"]`).First().Attr("href"); ok && strings.TrimSpace(href) != "" {
-		m.Favicon = resolveURL(pageURL, strings.TrimSpace(href))
+		m.Favicon = ResolveURL(pageURL, strings.TrimSpace(href))
 	}
 	if m.Author == "" {
 		m.Author = sidecarAuthor(HarvestSidecar(html))
@@ -115,7 +115,10 @@ func sidecarAuthor(sidecar json.RawMessage) string {
 	return walk(v)
 }
 
-func resolveURL(base, href string) string {
+// ResolveURL absolutizes a possibly-relative href against a base URL,
+// returning href untouched when either side is unparseable. Shared by
+// HarvestMetadata (favicon) and crawl sitemap <loc> resolution.
+func ResolveURL(base, href string) string {
 	u, err := url.Parse(href)
 	if err != nil {
 		return href

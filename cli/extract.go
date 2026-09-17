@@ -5,31 +5,35 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"gomagpie/clean"
+	"gomagpie/config"
 	"gomagpie/extract"
+	"gomagpie/scrape"
 	"gomagpie/store"
 
 	"github.com/spf13/cobra"
 )
 
 func newExtractCmd() *cobra.Command {
-	var schema, contentType, provider, model, out string
+	var schema, contentType, provider, model, out, prompt string
 	cmd := &cobra.Command{
 		Use:   "extract",
 		Short: "Extract structured data from stdin/file (no fetch)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runExtract(cmd.Context(), extractOptions{
 				Schema: schema, ContentType: contentType, Provider: provider,
-				Model: model, Out: out, File: firstArg(args),
+				Model: model, Out: out, File: firstArg(args), Prompt: prompt,
 			})
 		},
 	}
 	cmd.Flags().StringVar(&schema, "schema", "", "JSON Schema file (yaml/json)")
 	cmd.Flags().StringVar(&contentType, "content-type", "html", "html|markdown")
-	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp)
+	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp+"|auto")
 	cmd.Flags().StringVar(&model, "model", "", "model name")
 	cmd.Flags().StringVar(&out, "out", "", "output path (default stdout)")
+	cmd.Flags().StringVar(&prompt, "prompt", "", "free-text instruction; returns plain text with no schema (mutually exclusive with --schema)")
 	return cmd
 }
 
@@ -47,6 +51,7 @@ type extractOptions struct {
 	Model       string
 	Out         string
 	File        string
+	Prompt      string
 }
 
 func runExtract(ctx context.Context, o extractOptions) error {
@@ -63,7 +68,10 @@ func runExtract(ctx context.Context, o extractOptions) error {
 	if o.Model != "" {
 		cfg.Model = o.Model
 	}
-	if cfg.Schema == "" {
+	if o.Prompt != "" && cfg.Schema != "" {
+		return fail(2, "extract: --prompt and --schema are mutually exclusive")
+	}
+	if o.Prompt == "" && cfg.Schema == "" {
 		return fail(2, "extract: --schema is required")
 	}
 	if o.ContentType != "html" && o.ContentType != "markdown" {
@@ -93,9 +101,12 @@ func runExtract(ctx context.Context, o extractOptions) error {
 		cleaned = clean.CleanedPage{Markdown: string(input)}
 	}
 
-	sch, err := extract.LoadSchema(cfg.Schema)
-	if err != nil {
-		return err
+	var sch *extract.Schema
+	if o.Prompt == "" {
+		sch, err = extract.LoadSchema(cfg.Schema)
+		if err != nil {
+			return err
+		}
 	}
 	provider := cfg.ExtractProvider
 	model := cfg.Model
@@ -103,7 +114,7 @@ func runExtract(ctx context.Context, o extractOptions) error {
 		model = "claude-sonnet-5"
 	}
 	key := cfg.APIKey(provider)
-	if key == "" && needsAPIKey(provider) {
+	if provider != "auto" && key == "" && needsAPIKey(provider) {
 		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
 	}
 
@@ -115,6 +126,10 @@ func runExtract(ctx context.Context, o extractOptions) error {
 	runID := uuidNew()
 	if err := db.BeginRun(runID, "extract"); err != nil {
 		return err
+	}
+
+	if o.Prompt != "" {
+		return runExtractPrompt(ctx, db, runID, cfg, o, provider, model, cleaned)
 	}
 
 	ex, err := newExtractor(provider, key, model, sch, db, runID)
@@ -146,4 +161,37 @@ func runExtract(ctx context.Context, o extractOptions) error {
 		return merr
 	}
 	return writeOut(o.Out, doc)
+}
+
+// runExtractPrompt serves --prompt: schema-less text with no validator.
+// The prompt fan-out (explicit fail-fast, auto fallback) lives in
+// scrape.Prompt; this wrapper owns the CLI run and the key pre-checks
+// that preserve exit codes (missing key -> 7, keyless auto -> 2).
+func runExtractPrompt(ctx context.Context, db *store.DB, runID string, cfg config.Config, o extractOptions, provider, model string, cleaned clean.CleanedPage) error {
+	finish := func(ok, er int, status string) {
+		if ferr := db.FinishRun(runID, ok, er, status); ferr != nil {
+			fmt.Fprintf(os.Stderr, "warning: finish run: %v\n", ferr)
+		}
+	}
+	if provider == "auto" && len(autoProviders(cfg)) == 0 {
+		finish(0, 0, "error")
+		return fail(2, "extract: --provider auto: no provider has a key (tried %s)", strings.Join(scrape.AutoProviderOrder, ", "))
+	}
+	pr, err := scrape.Prompt(ctx, scrape.Deps{
+		DB: db,
+		ExtractorFor: func(p, key, m string, s *extract.Schema, runID string) (extract.Extractor, error) {
+			return newExtractor(p, key, m, s, db, runID)
+		},
+		APIKeyFor: cfg.APIKey,
+	}, runID, scrape.PromptOptions{
+		Provider: provider, Model: model, MaxCost: cfg.MaxCost,
+		System: "Reply with plain text only, no JSON.",
+		User:   o.Prompt + "\n\nPage markdown:\n" + cleaned.Markdown, Purpose: "extract",
+	})
+	if err != nil {
+		finish(0, 1, "error")
+		return err
+	}
+	finish(1, 0, "finished")
+	return writeOut(o.Out, pr.Text)
 }
