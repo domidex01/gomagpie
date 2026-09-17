@@ -71,6 +71,44 @@ type llmLink struct {
 	text, url string
 }
 
+// extractLinks is the single walk over markdown link targets, split into
+// anchors and image sources. llmBody footers the anchors, renderJSON reports
+// both, and every consumer shares the dedupe and the ![alt](src) guard.
+func extractLinks(md string) (anchors, images []llmLink) {
+	seenA, seenI := map[string]bool{}, map[string]bool{}
+	for _, idx := range mdLinkRe.FindAllStringSubmatchIndex(md, -1) {
+		text, u := md[idx[2]:idx[3]], md[idx[4]:idx[5]]
+		if u == "" || strings.HasPrefix(u, "#") {
+			continue
+		}
+		if strings.TrimSpace(text) == "" {
+			text = u
+		} else {
+			text = strings.TrimSpace(text)
+		}
+		if idx[0] > 0 && md[idx[0]-1] == '!' {
+			if !seenI[u] {
+				seenI[u] = true
+				images = append(images, llmLink{text: text, url: u})
+			}
+			continue
+		}
+		if !seenA[u] {
+			seenA[u] = true
+			anchors = append(anchors, llmLink{text: text, url: u})
+		}
+	}
+	return anchors, images
+}
+
+func linkURLs(ls []llmLink) []string {
+	out := make([]string, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, l.url)
+	}
+	return out
+}
+
 var (
 	mdLinkRe     = regexp.MustCompile(`\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 	mdImageRe    = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
@@ -94,34 +132,15 @@ func llmBody(md string) (string, []llmLink) {
 	lines := strings.Split(md, "\n")
 	var out []string
 	seenPara := map[string]bool{}
+	anchors, _ := extractLinks(md)
 	var links []llmLink
-	seenURL := map[string]bool{}
-	collectLinks := func(line string) {
-		// Anchor links only: image sources (![alt](src)) stay out of the
-		// footer — their alt text already preserves them in place, and an
-		// LLM cannot navigate to an image URL.
-		for _, idx := range mdLinkRe.FindAllStringSubmatchIndex(line, -1) {
-			if idx[0] > 0 && line[idx[0]-1] == '!' {
-				continue
-			}
-			m := mdLinkRe.FindStringSubmatch(line[idx[0]:idx[1]])
-			u := m[2]
-			if u == "" || strings.HasPrefix(u, "#") || seenURL[u] {
-				continue
-			}
-			if paginateRe.MatchString(u) || strings.Contains(strings.ToLower(m[1]), "reply") {
-				continue
-			}
-			seenURL[u] = true
-			text := strings.TrimSpace(m[1])
-			if text == "" {
-				text = u
-			}
-			links = append(links, llmLink{text: text, url: u})
+	for _, l := range anchors {
+		if paginateRe.MatchString(l.url) || strings.Contains(strings.ToLower(l.text), "reply") {
+			continue
 		}
+		links = append(links, l)
 	}
 	for _, ln := range lines {
-		collectLinks(ln)
 		// Drop decorative images (empty alt); keep informative ones as alt text.
 		if m := mdImageRe.FindStringSubmatch(ln); m != nil {
 			if strings.TrimSpace(m[1]) == "" {
@@ -158,7 +177,7 @@ func llmBody(md string) (string, []llmLink) {
 		}
 		out = append(out, ln)
 	}
-	out = collapseLogoRuns(out)
+	out = dropLogoRuns(out)
 	out = mergeStatLines(out)
 	// Dedup paragraphs/headings preserving order.
 	var deduped []string
@@ -214,43 +233,31 @@ func compactTableRow(ln string) string {
 	return "| " + strings.Join(cells, " | ") + " |"
 }
 
-// collapseLogoRuns drops runs of ≥2 consecutive short site-name/logo lines.
-func collapseLogoRuns(lines []string) []string {
+func isShortLine(ln string) bool {
+	t := strings.TrimSpace(ln)
+	return t != "" && len(t) < 40 && !strings.ContainsAny(t, ".!?|:") &&
+		!strings.HasPrefix(t, "#") && !strings.HasPrefix(t, "|") && !strings.HasPrefix(t, "- ") && !strings.HasPrefix(t, ">")
+}
+
+// dropLogoRuns removes runs of ≥2 consecutive short site-name/logo lines.
+// Single short lines survive (they may be real headings); a run never is.
+func dropLogoRuns(lines []string) []string {
 	var out []string
-	run := 0
-	for i, ln := range lines {
-		t := strings.TrimSpace(ln)
-		short := t != "" && len(t) < 40 && !strings.ContainsAny(t, ".!?|:") &&
-			!strings.HasPrefix(t, "#") && !strings.HasPrefix(t, "|") && !strings.HasPrefix(t, "- ") && !strings.HasPrefix(t, ">")
-		if short {
-			// Peek: run of shorts.
+	for i := 0; i < len(lines); {
+		if isShortLine(lines[i]) {
 			j := i
 			for j < len(lines) && isShortLine(lines[j]) {
 				j++
 			}
 			if j-i >= 2 {
-				if run == 0 {
-					// Keep the first, drop the rest of the run.
-					out = append(out, ln)
-				}
-				run++
-				if i+1 < j {
-					continue
-				}
-				run = 0
+				i = j
 				continue
 			}
 		}
-		run = 0
-		out = append(out, ln)
+		out = append(out, lines[i])
+		i++
 	}
 	return out
-}
-
-func isShortLine(ln string) bool {
-	t := strings.TrimSpace(ln)
-	return t != "" && len(t) < 40 && !strings.ContainsAny(t, ".!?|:") &&
-		!strings.HasPrefix(t, "#") && !strings.HasPrefix(t, "|") && !strings.HasPrefix(t, "- ") && !strings.HasPrefix(t, ">")
 }
 
 // mergeStatLines joins "12.99" + "Price" pairs into "Price: 12.99".
@@ -292,23 +299,23 @@ func llmStructured(raw json.RawMessage, body string) string {
 	return "```json\n" + s + "\n```\n"
 }
 
+// scrubStructured drops WebSite/WebPage chrome blocks wholesale, skips
+// articleBody dupes, and prunes long strings already contained in the body.
 func scrubStructured(v any, body string) any {
 	switch t := v.(type) {
 	case map[string]any:
+		if ty, _ := t["@type"].(string); ty == "WebSite" || ty == "WebPage" {
+			return nil
+		}
 		out := map[string]any{}
 		for k, val := range t {
 			if k == "articleBody" {
 				continue
 			}
-			if typ, ok := val.(map[string]any); ok {
-				if ty, ok := typ["@type"].(string); ok && (ty == "WebSite" || ty == "WebPage") {
-					continue
-				}
-			}
-			if ty, ok := t["@type"].(string); ok && (ty == "WebSite" || ty == "WebPage") && k != "@type" && k != "@context" {
-				continue
-			}
 			sv := scrubStructured(val, body)
+			if sv == nil {
+				continue // dropped chrome block or pruned dupe
+			}
 			if s, ok := sv.(string); ok && len(s) > 500 && strings.Contains(body, s[:200]) {
 				continue
 			}
@@ -318,11 +325,6 @@ func scrubStructured(v any, body string) any {
 	case []any:
 		var out []any
 		for _, e := range t {
-			if m, ok := e.(map[string]any); ok {
-				if ty, ok := m["@type"].(string); ok && (ty == "WebSite" || ty == "WebPage") {
-					continue
-				}
-			}
 			out = append(out, scrubStructured(e, body))
 		}
 		if out == nil {
@@ -368,21 +370,28 @@ func Render(p CleanedPage, format string) (string, error) {
 	case "text":
 		return ToText(p.Markdown), nil
 	case "json":
-		return renderJSON(p, format), nil
+		return renderJSON(p), nil
 	default:
 		return "", fmt.Errorf("clean: page format %q must be markdown|llm|text|json", format)
 	}
 }
 
-func renderJSON(p CleanedPage, format string) string {
-	links, images := pageLinks(p.Markdown)
+func renderJSON(p CleanedPage) string {
+	anchors, imgs := extractLinks(p.Markdown)
+	links, images := linkURLs(anchors), linkURLs(imgs)
+	if links == nil {
+		links = []string{}
+	}
+	if images == nil {
+		images = []string{}
+	}
 	env := map[string]any{
 		"url":             p.FinalURL,
 		"final_url":       p.FinalURL,
 		"title":           p.Title,
 		"markdown":        p.Markdown,
 		"structured_data": jsonRaw(p.StructuredData),
-		"page_format":     format,
+		"page_format":     "json",
 		"content":         p.Markdown,
 		"metadata":        p.Metadata,
 		"links":           links,
@@ -405,29 +414,4 @@ func jsonRaw(r json.RawMessage) any {
 		return string(r)
 	}
 	return v
-}
-
-func pageLinks(md string) ([]string, []string) {
-	var links, images []string
-	seen := map[string]bool{}
-	for _, m := range mdLinkRe.FindAllStringSubmatch(md, -1) {
-		if !seen[m[2]] {
-			seen[m[2]] = true
-			links = append(links, m[2])
-		}
-	}
-	seenImg := map[string]bool{}
-	for _, m := range mdImageRe.FindAllStringSubmatch(md, -1) {
-		if !seenImg[m[2]] {
-			seenImg[m[2]] = true
-			images = append(images, m[2])
-		}
-	}
-	if links == nil {
-		links = []string{}
-	}
-	if images == nil {
-		images = []string{}
-	}
-	return links, images
 }

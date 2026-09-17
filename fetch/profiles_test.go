@@ -126,7 +126,7 @@ func TestIsChallengePage_Table(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := fetch.IsChallengePage([]byte(c.body), nil, c.status); got != c.want {
+			if got := fetch.IsChallengePage([]byte(c.body), c.status); got != c.want {
 				t.Errorf("IsChallengePage() = %v, want %v", got, c.want)
 			}
 		})

@@ -48,7 +48,7 @@ func TestLLMText_NoAddedMarkers(t *testing.T) {
 	}
 }
 
-// Anchors only (mirrors collectLinks): image targets ![alt](src) are excluded.
+// Anchors only (mirrors extractLinks): image targets ![alt](src) are excluded.
 var mdTargetRe = regexp.MustCompile(`[^!]\[([^\]]*)\]\((https?://[^)\s]+)\)`)
 
 func TestLLMText_LinksPreserved(t *testing.T) {
@@ -89,6 +89,17 @@ func TestLLMText_StructuredGate(t *testing.T) {
 		if len(out[i:]) > 16*1024+512 {
 			t.Errorf("structured block exceeds 16KB cap: %d", len(out[i:]))
 		}
+	}
+}
+
+func TestLLMText_TopLevelChromeDropped(t *testing.T) {
+	p := clean.CleanedPage{
+		Title: "T", Markdown: "# T\n\n" + strings.Repeat("prose ", 50),
+		StructuredData: json.RawMessage(`{"@context":"https://schema.org","@type":"WebSite","name":"Example","url":"https://example.com/"}`),
+	}
+	out := clean.ToLLMText(p)
+	if strings.Contains(out, "WebSite") || strings.Contains(out, "Structured Data") {
+		t.Errorf("top-level WebSite sidecar leaked into output:\n%s", out)
 	}
 }
 

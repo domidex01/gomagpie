@@ -1,8 +1,9 @@
 package fetch
 
 import (
-	"net/http"
 	"strings"
+
+	"gomagpie/clean"
 )
 
 // HeaderProfiles are header bundles applied to static fetches. "default" is
@@ -46,38 +47,19 @@ func profileHeaders(profile string) map[string]string {
 	return HeaderProfiles["default"]
 }
 
-var challengeMarkers = []string{
-	"just a moment", "attention required", "verify you are human",
-	"_abck", "akamai", "cf-chl", "__cf_chl", "datadome", "perimeterx",
-	"captcha", "access denied",
-}
-
 // IsChallengePage reports whether a response looks like a bot-protection
-// challenge: body <15 KB AND (challenge status OR title/marker match).
-// Rich pages (≥200 words) never count — an article mentioning
-// "Just a moment" must pass clean.
-func IsChallengePage(body []byte, h http.Header, status int) bool {
-	if wordCount(string(body)) >= 200 {
+// challenge: body <15 KB AND (challenge status OR marker match).
+// Rich pages (≥200 scored words) never count — an article mentioning
+// "Just a moment" must pass clean. Vocabulary shared with clean.Classify.
+func IsChallengePage(body []byte, status int) bool {
+	if clean.WordCount(string(body)) >= clean.ThinPageWords {
 		return false
 	}
-	switch status {
-	case 401, 403, 429, 503:
-		if len(body) < 15*1024 {
-			return true
-		}
+	if clean.ChallengeStatuses(status) && len(body) < 15*1024 {
+		return true
 	}
 	if len(body) >= 15*1024 {
 		return false
 	}
-	lower := strings.ToLower(string(body))
-	for _, m := range challengeMarkers {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
-
-func wordCount(s string) int {
-	return len(strings.Fields(s))
+	return clean.HasChallengeMarkers(strings.ToLower(string(body)))
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 
 	"gomagpie/clean"
 	"gomagpie/config"
@@ -144,7 +143,7 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		case errors.Is(err, crawl.ErrCostCeiling):
 			return fail(6, "cost ceiling exceeded: %v", err)
 		case errors.Is(err, clean.ErrQuality):
-			return fail(8, "quality blocked (%s) for %s", qualityOf(err), rawURL)
+			return fail(8, "%s", qualityMessage(err, rawURL))
 		}
 		return err
 	}
@@ -194,15 +193,13 @@ func applyScrapeFlags(cfg *config.Config, o scrapeOptions) {
 	cfg.ApplyFlags(f)
 }
 
-func qualityOf(err error) string {
-	msg := err.Error()
-	if i := strings.Index(msg, "quality blocked ("); i >= 0 {
-		rest := msg[i+len("quality blocked ("):]
-		if j := strings.Index(rest, ")"); j >= 0 {
-			return rest[:j]
-		}
+// qualityMessage renders the typed issue when available, falling back to
+// the raw URL when the wrap chain carries no QualityError.
+func qualityMessage(err error, rawURL string) string {
+	if issue := clean.QualityIssue(err); issue != clean.IssueNone {
+		return "quality blocked (" + string(issue) + ") for " + rawURL
 	}
-	return "blocked"
+	return "quality blocked for " + rawURL
 }
 
 func markdownDoc(r scrape.Result) (string, error) {

@@ -87,11 +87,11 @@ func (s *StaticFetcher) Fetch(ctx context.Context, req FetchRequest) (*FetchResp
 	if err != nil {
 		return nil, err
 	}
-	if req.Profile == "" || !IsChallengePage(resp.HTML, resp.Headers, resp.StatusCode) {
+	if req.Profile == "" || !IsChallengePage(resp.HTML, resp.StatusCode) {
 		return resp, nil
 	}
 	if home := homepageOf(req.URL); home != "" {
-		_, _ = s.do(ctx, FetchRequest{URL: home, Timeout: req.Timeout, Profile: req.Profile}) //nolint:errcheck // warmup best-effort; retry proceeds regardless
+		_, _ = s.do(ctx, FetchRequest{URL: home, Timeout: req.Timeout, Profile: req.Profile, Cookies: req.Cookies}) //nolint:errcheck // warmup best-effort; retry proceeds regardless
 	}
 	retry, rerr := s.do(ctx, req)
 	if rerr != nil {

@@ -280,9 +280,9 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		var last *fetch.FetchResponse
 		resp, err := FetchWithRetry(ctx, func() (*fetch.FetchResponse, error) {
 			r, ferr := staticFetcher.Fetch(ctx, fetch.FetchRequest{URL: task.URL})
-			if ferr == nil {
-				last = r
-			}
+			// Reset on transport failure: qualityErr must classify the
+			// terminal outcome, never a stale response from an earlier try.
+			last = r
 			return r, ferr
 		})
 		if err != nil {
@@ -670,7 +670,7 @@ func qualityErr(ctx context.Context, task core.FetchTask, resp *fetch.FetchRespo
 	if cerr != nil || cleaned.Quality == clean.IssueNone {
 		return nil
 	}
-	return fmt.Errorf("crawl: quality blocked (%s) for %s: %w", cleaned.Quality, task.URL, clean.ErrQuality)
+	return &clean.QualityError{Issue: cleaned.Quality, URL: task.URL}
 }
 
 func domainOf(rawURL string) string {

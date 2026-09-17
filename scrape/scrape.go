@@ -77,6 +77,12 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	default:
 		return Result{}, fmt.Errorf("scrape: render %q must be auto|static|browser", render)
 	}
+	// Validate before any I/O: a bogus format must not cost a fetch+clean.
+	switch o.PageFormat {
+	case "", "markdown", "llm", "text", "json":
+	default:
+		return Result{}, fmt.Errorf("scrape: page format %q must be markdown|llm|text|json", o.PageFormat)
+	}
 
 	runID := uuidNew()
 	if err := d.DB.BeginRun(runID, "scrape"); err != nil {
@@ -109,7 +115,7 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	}
 	if cleaned.Quality != clean.IssueNone {
 		finish(0, 1, "error")
-		return Result{}, fmt.Errorf("scrape: quality blocked (%s) for %s: %w", cleaned.Quality, rawURL, clean.ErrQuality)
+		return Result{}, &clean.QualityError{Issue: cleaned.Quality, URL: rawURL}
 	}
 	base := Result{RunID: runID, URL: page.URL, FinalURL: cleaned.FinalURL, Title: cleaned.Title,
 		Markdown: cleaned.Markdown, StructuredData: cleaned.StructuredData}
