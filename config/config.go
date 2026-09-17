@@ -24,6 +24,9 @@ type Config struct {
 	CacheDB         string  `yaml:"cache_db" json:"cache_db"`
 	MaxCost         float64 `yaml:"max_cost" json:"max_cost"`
 	NoCache         bool    `yaml:"no_cache" json:"no_cache"`
+	ServeTransport  string  `yaml:"serve_transport" json:"serve_transport"`
+	ServeAddr       string  `yaml:"serve_addr" json:"serve_addr"`
+	ExporterCmd     string  `yaml:"exporter_cmd" json:"exporter_cmd"`
 
 	// flag-provided API key (never persisted, never logged)
 	APIKeyFlag string `yaml:"-" json:"-"`
@@ -38,6 +41,8 @@ func DefaultConfig() Config {
 		Render:          "auto",
 		Format:          "json",
 		CacheDB:         DefaultDBPath(),
+		ServeTransport:  "stdio",
+		ServeAddr:       ":8080",
 	}
 }
 
@@ -143,6 +148,15 @@ func (c *Config) overlay(o Config) {
 	if o.NoCache {
 		c.NoCache = o.NoCache
 	}
+	if o.ServeTransport != "" {
+		c.ServeTransport = o.ServeTransport
+	}
+	if o.ServeAddr != "" {
+		c.ServeAddr = o.ServeAddr
+	}
+	if o.ExporterCmd != "" {
+		c.ExporterCmd = o.ExporterCmd
+	}
 }
 
 func (c *Config) overlayEnv() {
@@ -169,6 +183,15 @@ func (c *Config) overlayEnv() {
 	}
 	if v := os.Getenv("GOMAGPIE_CACHE_DB"); v != "" {
 		c.CacheDB = v
+	}
+	if v := os.Getenv("GOMAGPIE_SERVE_TRANSPORT"); v != "" {
+		c.ServeTransport = v
+	}
+	if v := os.Getenv("GOMAGPIE_SERVE_ADDR"); v != "" {
+		c.ServeAddr = v
+	}
+	if v := os.Getenv("GOMAGPIE_EXPORTER_CMD"); v != "" {
+		c.ExporterCmd = v
 	}
 	if v := os.Getenv("GOMAGPIE_MAX_COST"); v != "" {
 		var f float64
@@ -212,6 +235,15 @@ func (c *Config) ApplyFlags(f Flags) {
 	if f.APIKeyChanged {
 		c.APIKeyFlag = f.APIKey
 	}
+	if f.ServeTransportChanged {
+		c.ServeTransport = f.ServeTransport
+	}
+	if f.ServeAddrChanged {
+		c.ServeAddr = f.ServeAddr
+	}
+	if f.ExporterCmdChanged {
+		c.ExporterCmd = f.ExporterCmd
+	}
 	if c.Model == "" {
 		c.Model = DefaultModel(c.ExtractProvider)
 	}
@@ -219,26 +251,32 @@ func (c *Config) ApplyFlags(f Flags) {
 
 // Flags mirrors the CLI surface so config stays cobra-free.
 type Flags struct {
-	Provider        string
-	Model           string
-	Render          string
-	Format          string
-	Out             string
-	Schema          string
-	CacheDB         string
-	MaxCost         float64
-	NoCache         bool
-	APIKey          string
-	ProviderChanged bool
-	ModelChanged    bool
-	RenderChanged   bool
-	FormatChanged   bool
-	OutChanged      bool
-	SchemaChanged   bool
-	CacheDBChanged  bool
-	MaxCostChanged  bool
-	NoCacheChanged  bool
-	APIKeyChanged   bool
+	Provider              string
+	Model                 string
+	Render                string
+	Format                string
+	Out                   string
+	Schema                string
+	CacheDB               string
+	MaxCost               float64
+	NoCache               bool
+	APIKey                string
+	ServeTransport        string
+	ServeAddr             string
+	ExporterCmd           string
+	ProviderChanged       bool
+	ModelChanged          bool
+	RenderChanged         bool
+	FormatChanged         bool
+	OutChanged            bool
+	SchemaChanged         bool
+	CacheDBChanged        bool
+	MaxCostChanged        bool
+	NoCacheChanged        bool
+	APIKeyChanged         bool
+	ServeTransportChanged bool
+	ServeAddrChanged      bool
+	ExporterCmdChanged    bool
 }
 
 // keyEnvName maps a provider id to its env-var middle: opencode-go → OPENCODE_GO.
@@ -285,6 +323,9 @@ func (c Config) Redacted() map[string]any {
 		"format":           c.Format,
 		"cache_db":         c.CacheDB,
 		"max_cost":         c.MaxCost,
+		"serve_transport":  c.ServeTransport,
+		"serve_addr":       c.ServeAddr,
+		"exporter_cmd":     c.ExporterCmd,
 		"api_key":          key,
 		"config_file":      c.filePath,
 	}

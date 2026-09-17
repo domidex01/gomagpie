@@ -89,17 +89,24 @@ func csvColumns(sch *extract.Schema) []string {
 	return append(required, rest...)
 }
 
+// jsonRecord is the single home for the JSON envelope: the writer encodes
+// exactly this, and the sink hands the same object to OnRecord (exporter
+// tee), so the two streams can never drift apart in shape.
+func jsonRecord(r core.PageResult) map[string]any {
+	return map[string]any{"url": r.Task.URL, "extracted": r.Record}
+}
+
 func (w *writer) write(r core.PageResult) error {
 	url := r.Task.URL
 	switch w.format {
 	case "jsonl":
-		if err := w.enc.Encode(map[string]any{"url": url, "extracted": r.Record}); err != nil {
+		if err := w.enc.Encode(jsonRecord(r)); err != nil {
 			return fmt.Errorf("crawl: jsonl encode: %w", err)
 		}
 		w.n++
 		return nil
 	case "json":
-		w.buf = append(w.buf, map[string]any{"url": url, "extracted": r.Record})
+		w.buf = append(w.buf, jsonRecord(r))
 		w.n++
 		return nil
 	case "csv":

@@ -34,7 +34,8 @@ error handling, security.
 ## Structure (per spec §13)
 
 ```
-cmd/magpie/      # Cobra root
+cmd/magpie/      # 10-line shim (os.Exit(cli.Execute()))
+cli/             # Cobra tree (importable; custom binaries link here)
 core/         # module registry, pipeline wiring
 fetch/ clean/ extract/ selector/ crawl/ store/ mcp/ plugin/ config/
 testdata/     # golden fixtures
@@ -45,7 +46,7 @@ plan/         # big-plan.md + phase-N.md planning artifacts
 
 - **No new dep without asking:** a dependency is a permanent maintenance and supply-chain cost.
 - **No live-network tests in the default suite** — gate browser tests with `//go:build browser`.
-- **No CGO deps, ever.** No plugins/WASM until core (Milestones 1–2) is stable.
+- **No CGO deps, ever.**
 - **Never import go-rod outside `fetch/`** — the browser sits behind the `Fetcher` interface.
 - **phase-plan/run-phase skills expect `stack: python|nextjs|react|typescript`** — this repo is Go.
   Write `stack: go` in phase files and expect `run-phase` to hard-block; execute phases manually

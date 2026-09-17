@@ -1,0 +1,198 @@
+package fetch_test
+
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"gomagpie/fetch"
+)
+
+type challengeHits struct {
+	mu        sync.Mutex
+	challenge int
+	homepage  int
+	cookies   []string
+}
+
+func newChallengeOrigin(t *testing.T, h *challengeHits, challengeBody string) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		h.homepage++
+		h.mu.Unlock()
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "warmed"})
+		_, _ = io.WriteString(w, "<html><body>home</body></html>") //nolint:errcheck // httptest local
+	})
+	mux.HandleFunc("/challenge", func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		h.challenge++
+		h.cookies = append(h.cookies, r.Header.Get("Cookie"))
+		n := h.challenge
+		h.mu.Unlock()
+		if n == 1 {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, challengeBody) //nolint:errcheck // httptest local
+			return
+		}
+		_, _ = io.WriteString(w, "<html><head><title>Real page</title></head><body><p>"+strings.Repeat("actual article content ", 50)+"</p></body></html>") //nolint:errcheck // httptest local
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL + "/challenge"
+}
+
+func echoOrigin(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "UA=%s|CH=%s|CK=%s", r.Header.Get("User-Agent"), r.Header.Get("Sec-CH-UA"), r.Header.Get("Cookie")) //nolint:errcheck // httptest local
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func fetchBody(t *testing.T, url string, req fetch.FetchRequest) string {
+	t.Helper()
+	f, err := fetch.NewStaticFetcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.URL = url
+	resp, err := f.Fetch(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	return string(resp.HTML)
+}
+
+func TestProfiles_Default(t *testing.T) {
+	srv := echoOrigin(t)
+	body := fetchBody(t, srv.URL, fetch.FetchRequest{})
+	if !strings.Contains(body, "magpie/1.0") {
+		t.Errorf("default profile UA = %q, want magpie", body)
+	}
+}
+
+func TestProfiles_UnknownFallsBack(t *testing.T) {
+	srv := echoOrigin(t)
+	body := fetchBody(t, srv.URL, fetch.FetchRequest{Profile: "safari"})
+	if !strings.Contains(body, "magpie/1.0") {
+		t.Errorf("unknown profile UA = %q, want default magpie", body)
+	}
+}
+
+func TestProfiles_ChromeFirefox(t *testing.T) {
+	srv := echoOrigin(t)
+	chrome := fetchBody(t, srv.URL, fetch.FetchRequest{Profile: "chrome"})
+	if !strings.Contains(chrome, "Chrome/126") || !strings.Contains(chrome, "Chromium") {
+		t.Errorf("chrome profile = %q, want Chrome/126 + Sec-CH-UA value", chrome)
+	}
+	firefox := fetchBody(t, srv.URL, fetch.FetchRequest{Profile: "firefox"})
+	if !strings.Contains(firefox, "Firefox/128") {
+		t.Errorf("firefox profile = %q, want Firefox/128", firefox)
+	}
+	if chrome == firefox {
+		t.Error("chrome and firefox profiles identical server-side")
+	}
+}
+
+func TestCookies_Passthrough(t *testing.T) {
+	srv := echoOrigin(t)
+	body := fetchBody(t, srv.URL, fetch.FetchRequest{Cookies: "a=b; c=d"})
+	if !strings.Contains(body, "a=b; c=d") {
+		t.Errorf("cookie echo = %q, want verbatim passthrough", body)
+	}
+}
+
+func TestIsChallengePage_Table(t *testing.T) {
+	thin := strings.Repeat("x ", 100) // ~100 words
+	rich := strings.Repeat("honest prose ", 300)
+	cases := []struct {
+		name   string
+		body   string
+		status int
+		want   bool
+	}{
+		{"403 just-a-moment thin", "<html><head><title>Just a moment</title></head><body>" + thin + "</body></html>", 403, true},
+		{"200 rich mentioning captcha", "<html><body>" + rich + " captcha</body></html>", 200, false},
+		{"200 thin captcha marker", "<html><body>captcha verify</body></html>", 200, true},
+		{"404 plain", "<html><body>not found here</body></html>", 404, false},
+		{"503 thin", "<html><body>down</body></html>", 503, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := fetch.IsChallengePage([]byte(c.body), c.status); got != c.want {
+				t.Errorf("IsChallengePage() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestChallenge_WarmupRetry(t *testing.T) {
+	var h challengeHits
+	url := newChallengeOrigin(t, &h, "<html><head><title>Just a moment</title></head><body>verifying</body></html>")
+	f, err := fetch.NewStaticFetcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: url, Profile: "chrome"})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if !strings.Contains(string(resp.HTML), "Real page") {
+		t.Errorf("retry body = %q, want real page", resp.HTML)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.challenge != 2 || h.homepage != 1 {
+		t.Errorf("hits challenge=%d homepage=%d, want 2/1", h.challenge, h.homepage)
+	}
+	if !strings.Contains(h.cookies[1], "session=warmed") {
+		t.Errorf("retry cookies = %q, want warmed session", h.cookies)
+	}
+}
+
+func TestChallenge_NoRetryWhenClean(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = io.WriteString(w, "<html><body>"+strings.Repeat("honest prose captcha ", 100)+"</body></html>") //nolint:errcheck // httptest local; short write unactionable
+	}))
+	t.Cleanup(srv.Close)
+	f, err := fetch.NewStaticFetcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: srv.URL, Profile: "chrome"}); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 {
+		t.Errorf("hits = %d, want exactly 1 (no retry on clean page)", hits)
+	}
+}
+
+func TestChallenge_NoProfileNoRetry(t *testing.T) {
+	var h challengeHits
+	url := newChallengeOrigin(t, &h, "<html><head><title>Just a moment</title></head><body>verifying</body></html>")
+	f, err := fetch.NewStaticFetcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 403 {
+		t.Errorf("status = %d, want 403 passthrough without profile", resp.StatusCode)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.challenge != 1 || h.homepage != 0 {
+		t.Errorf("hits challenge=%d homepage=%d, want 1/0", h.challenge, h.homepage)
+	}
+}

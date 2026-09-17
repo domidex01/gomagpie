@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gomagpie/store"
@@ -220,5 +221,48 @@ func TestReopenPersists(t *testing.T) {
 	}
 	if p, _, _, _, serr := db2.CrawlStats("r1"); serr != nil || p != 1 {
 		t.Errorf("pending after reopen = %d,%v want 1", p, serr)
+	}
+}
+
+func TestGetRun(t *testing.T) {
+	db := openTempDB(t)
+	const id = "run-get-1"
+	if err := db.BeginRun(id, "crawl"); err != nil {
+		t.Fatalf("BeginRun: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := db.LogLLMCall(id, store.LLMCall{Provider: "fake", Model: "fake", PromptTokens: 10, CompletionTokens: 5, USDEstimate: 0.001, Purpose: "extract"}); err != nil {
+			t.Fatalf("LogLLMCall: %v", err)
+		}
+	}
+	if err := db.FinishRun(id, 3, 1, "complete"); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	got, err := db.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.RunID != id || got.Command != "crawl" || got.Status != "complete" {
+		t.Errorf("identity = %+v, want run-get-1/crawl/complete", got)
+	}
+	if got.PagesOK != 3 || got.PagesErr != 1 {
+		t.Errorf("pages = %d/%d, want 3/1", got.PagesOK, got.PagesErr)
+	}
+	if got.PromptTokens != 20 || got.CompletionTokens != 10 {
+		t.Errorf("tokens = %d/%d, want 20/10", got.PromptTokens, got.CompletionTokens)
+	}
+	if got.USDEstimate != 0.002 {
+		t.Errorf("usd = %v, want 0.002", got.USDEstimate)
+	}
+}
+
+func TestGetRun_Unknown(t *testing.T) {
+	db := openTempDB(t)
+	_, err := db.GetRun("run-nope-xyz")
+	if err == nil {
+		t.Fatal("GetRun(unknown) = nil, want loud error")
+	}
+	if !strings.Contains(err.Error(), "run-nope-xyz") {
+		t.Errorf("error %q does not contain the run id", err)
 	}
 }

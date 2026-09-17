@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 
 	"gomagpie/crawl"
 	"gomagpie/extract"
+	pluginExec "gomagpie/plugin/exec"
 	"gomagpie/store"
 
 	"github.com/spf13/cobra"
@@ -21,7 +23,7 @@ func newCrawlCmd() *cobra.Command {
 	var sameHost bool
 	var rate float64
 	var ignoreRobots bool
-	var provider, model string
+	var provider, model, exporterCmd string
 	cmd := &cobra.Command{
 		Use:   "crawl <url>",
 		Short: "BFS crawl + extract a site",
@@ -31,7 +33,7 @@ func newCrawlCmd() *cobra.Command {
 				Schema: schema, Format: format, Out: out, Resume: resume,
 				MaxPages: maxPages, MaxDepth: maxDepth, Concurrency: concurrency,
 				SameHost: sameHost, Rate: rate, IgnoreRobots: ignoreRobots,
-				Provider: provider, Model: model,
+				Provider: provider, Model: model, ExporterCmd: exporterCmd,
 			})
 		},
 	}
@@ -47,6 +49,8 @@ func newCrawlCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&ignoreRobots, "ignore-robots", false, "fetch despite robots.txt (prints a warning)")
 	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp)
 	cmd.Flags().StringVar(&model, "model", "", "model name")
+	// ponytail: argv = strings.Fields (no quoting) — paths with spaces need a wrapper script.
+	cmd.Flags().StringVar(&exporterCmd, "exporter-cmd", "", "pipe each record as JSONL to this program's stdin (in addition to --out)")
 	return cmd
 }
 
@@ -63,6 +67,7 @@ type crawlCLIOptions struct {
 	IgnoreRobots bool
 	Provider     string
 	Model        string
+	ExporterCmd  string
 }
 
 func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
@@ -102,6 +107,9 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	sch, err := extract.LoadSchema(cfg.Schema)
 	if err != nil {
 		return err
+	}
+	if o.ExporterCmd != "" {
+		cfg.ExporterCmd = o.ExporterCmd
 	}
 	if o.IgnoreRobots {
 		fmt.Fprintln(os.Stderr, "WARNING: --ignore-robots set; fetching despite robots.txt")
@@ -161,6 +169,21 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		return out, nil
 	}
 
+	// Subprocess exporter tee: records flow to --out AND the child stdin.
+	// The exporter is a copy — its failure warns (exit 4) but never blocks
+	// the primary sink.
+	var exportCh chan map[string]any
+	var exportDone chan error
+	var onRecord func(map[string]any)
+	if cfg.ExporterCmd != "" {
+		argv := strings.Fields(cfg.ExporterCmd)
+		exp := &pluginExec.Exporter{Cmd: argv}
+		exportCh = make(chan map[string]any, 1000)
+		exportDone = make(chan error, 1)
+		go func() { exportDone <- exp.Export(ctx, exportCh) }()
+		onRecord = func(r map[string]any) { exportCh <- r }
+	}
+
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
@@ -170,8 +193,17 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		Format: cfg.Format, Out: cfg.Out, RunID: runID,
 		Resume: resuming, ResumeID: o.Resume, IgnoreRobots: o.IgnoreRobots,
 		Provider: provider, Model: model, MaxCost: cfg.MaxCost,
-		DB: db, Extractor: ex, Propose: propose,
+		DB: db, Extractor: ex, Propose: propose, OnRecord: onRecord,
 	})
+	if exportCh != nil {
+		close(exportCh)
+		if exportErr := <-exportDone; exportErr != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: exporter: %v\n", exportErr)
+			if err == nil && res.Records > 0 && res.PagesErr == 0 {
+				return fail(4, "crawl: exporter failed: %v", exportErr)
+			}
+		}
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, crawl.ErrRobotsBlocked):

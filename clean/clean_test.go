@@ -44,6 +44,41 @@ func cleanFile(t *testing.T, htmlName string) clean.CleanedPage {
 	return got
 }
 
+func goldenDir(t *testing.T, dir, name, got string) {
+	t.Helper()
+	path := filepath.Join("..", "testdata", dir, name)
+	got = strings.TrimSpace(got) + "\n"
+	if *update {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("golden %s missing (run with -update): %v", path, err)
+	}
+	if strings.TrimSpace(string(want)) != strings.TrimSpace(got) {
+		t.Errorf("golden %s mismatch:\n--- got ---\n%s\n--- want ---\n%s", name, got, want)
+	}
+}
+
+func TestClean_PopulatesNewFields(t *testing.T) {
+	got := cleanFile(t, "article")
+	if got.Metadata.WordCount <= 100 {
+		t.Errorf("WordCount = %d, want > 100", got.Metadata.WordCount)
+	}
+	if got.Quality != clean.IssueNone {
+		t.Errorf("Quality = %q, want empty", got.Quality)
+	}
+	if got.Metadata.Lang == "" {
+		t.Error("Lang empty on article fixture")
+	}
+}
+
 func TestCleanArticle(t *testing.T) {
 	got := cleanFile(t, "article")
 	golden(t, "article", got.Markdown)
