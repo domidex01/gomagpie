@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,9 @@ import (
 	"testing"
 
 	"gomagpie/config"
+	"gomagpie/fetch"
+
+	"github.com/spf13/cobra"
 )
 
 func resetGlobals() {
@@ -729,5 +733,118 @@ func TestProviderHelp_ListsAll(t *testing.T) {
 				t.Errorf("%s --provider help missing %q (got %q)", cmd, id, u)
 			}
 		}
+	}
+}
+
+// --- Phase D additions: crawl scope flags, bad-glob exit 2, SSRF exit-2
+// wiring, --no-sitemap e2e. ---
+
+func TestCrawlFlags_HelpText(t *testing.T) {
+	resetGlobals()
+	root := rootCmd()
+	var crawlCmd *cobra.Command
+	for _, c := range root.Commands() {
+		if c.Name() == "crawl" {
+			crawlCmd = c
+			break
+		}
+	}
+	if crawlCmd == nil {
+		t.Fatal("no crawl command on the root")
+	}
+	for _, flag := range []string{"path-prefix", "include", "exclude", "allow-subdomains", "no-sitemap"} {
+		if crawlCmd.Flags().Lookup(flag) == nil {
+			t.Errorf("crawl is missing --%s", flag)
+		}
+	}
+}
+
+func TestCrawl_BadGlobExit2(t *testing.T) {
+	testEnv(t, "cache.db")
+	fakeLLM(t, `{"name":"Widget","price":12.99}`)
+	// 200 ** pairs blow the ≤4 cap; the seed points at a closed port so any
+	// dial attempt would be the WRONG failure — the glob must be rejected
+	// before any I/O.
+	seed := "http://" + closedPortCLI(t) + "/"
+	err := runCrawl(t.Context(), seed, crawlCLIOptions{
+		Schema: priceSchema(t), Format: "jsonl", Out: filepath.Join(t.TempDir(), "r.jsonl"),
+		MaxPages: 2, SameHost: true, Rate: 1000,
+		Provider: "openai", Model: "gpt-4o-mini",
+		Include: []string{strings.Repeat("a/**/b/", 200) + "c"},
+	})
+	if codeOf(err) != 2 {
+		t.Fatalf("exit = %d, want 2 (err=%v)", codeOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "**") {
+		t.Errorf("error %v does not name the glob problem", err)
+	}
+}
+
+// closedPortCLI is the cli-local copy of crawl's closedPort helper (the
+// crawl package's is internal to its own test build).
+func closedPortCLI(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+func TestScrapeExit_PrivateAddress(t *testing.T) {
+	// Unit: the sentinel maps to exit 2 at the CLI edge.
+	err := scrapeExit(fmt.Errorf("scrape: fetch: %w", fetch.ErrPrivateAddress), "http://x/", "openai")
+	if codeOf(err) != 2 {
+		t.Fatalf("exit = %d, want 2 (err=%v)", codeOf(err), err)
+	}
+}
+
+func TestScrape_PrivateExit2(t *testing.T) {
+	testEnv(t, "cache.db")
+	// GOMAGPIE_STRICT_SSRF=1 opts the test binary OUT of the test-binary
+	// relaxation, so the production-strict path is exercised end to end:
+	// pre-dial rejection, no listener needed (127.0.0.1:9 is unroutable).
+	t.Setenv("GOMAGPIE_STRICT_SSRF", "1")
+	err := runScrape(t.Context(), "http://127.0.0.1:9/", scrapeOptions{
+		Format: "json", Out: filepath.Join(t.TempDir(), "s.json"), Render: "static",
+	})
+	if codeOf(err) != 2 {
+		t.Fatalf("exit = %d, want 2 (err=%v)", codeOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1") {
+		t.Errorf("error %v does not name the blocked address", err)
+	}
+}
+
+func TestCrawl_NoSitemapZeroFetch_CLI(t *testing.T) {
+	testEnv(t, "cache.db")
+	fakeLLM(t, `{"name":"Widget","price":12.99}`)
+	sitemapHits := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("User-agent: *\nDisallow:\nSitemap: /sitemap.xml\n")) //nolint:errcheck // httptest local
+	})
+	mux.HandleFunc("/sitemap.xml", func(w http.ResponseWriter, _ *http.Request) {
+		sitemapHits++
+		_, _ = w.Write([]byte(`<urlset><url><loc>never-fetched</loc></url></urlset>`)) //nolint:errcheck // httptest local
+	})
+	mux.HandleFunc("/page", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(crawlPageHTML())) //nolint:errcheck // httptest local
+	})
+	srv := newTestServer(t, mux)
+	err := runCrawl(t.Context(), srv+"/page", crawlCLIOptions{
+		Schema: priceSchema(t), Format: "jsonl", Out: filepath.Join(t.TempDir(), "r.jsonl"),
+		MaxPages: 2, MaxDepth: 0, SameHost: true, Rate: 1000,
+		Provider: "openai", Model: "gpt-4o-mini", NoSitemap: true,
+	})
+	if err != nil {
+		t.Fatalf("crawl: %v", err)
+	}
+	if sitemapHits != 0 {
+		t.Errorf("sitemap hits = %d, want 0 with --no-sitemap", sitemapHits)
 	}
 }

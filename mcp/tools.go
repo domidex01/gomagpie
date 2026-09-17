@@ -27,16 +27,16 @@ var defaultCrawlSchema = []byte(`{"type":"object","properties":{"title":{"type":
 
 // ScrapeIn is the scrape_url input.
 type ScrapeIn struct {
-	URL             string         `json:"url" jsonschema:"absolute http(s) or file URL to scrape"`
-	Schema          map[string]any `json:"schema,omitempty" jsonschema:"JSON Schema object; omit for cleaned markdown only"`
-	Render          string         `json:"render,omitempty" jsonschema:"auto, static, or browser"`
-	UseCache        *bool          `json:"use_cache,omitempty" jsonschema:"apply cached selectors when available"`
-	PageFormat      string         `json:"page_format,omitempty" jsonschema:"page output format: markdown, llm, text, or json"`
-	Include         []string       `json:"include,omitempty" jsonschema:"CSS selectors: scrape only matching subtrees"`
-	Exclude         []string       `json:"exclude,omitempty" jsonschema:"CSS selectors: drop matching nodes"`
-	OnlyMainContent *bool          `json:"only_main_content,omitempty" jsonschema:"main-content only"`
-	Profile         string         `json:"profile,omitempty" jsonschema:"header profile: default, chrome, or firefox"`
-	Cookies         string         `json:"cookies,omitempty" jsonschema:"raw Cookie header value"`
+	URL             string     `json:"url" jsonschema:"absolute http(s) URL to scrape (file:// works only when GOMAGPIE_ALLOW_FILE=1; private/loopback hosts are rejected)"`
+	Schema          FlexMap    `json:"schema,omitempty" jsonschema:"JSON Schema object; omit for cleaned markdown only"`
+	Render          string     `json:"render,omitempty" jsonschema:"auto, static, or browser"`
+	UseCache        *FlexBool  `json:"use_cache,omitempty" jsonschema:"apply cached selectors when available"`
+	PageFormat      string     `json:"page_format,omitempty" jsonschema:"page output format: markdown, llm, text, or json"`
+	Include         StringList `json:"include,omitempty" jsonschema:"CSS selectors: scrape only matching subtrees"`
+	Exclude         StringList `json:"exclude,omitempty" jsonschema:"CSS selectors: drop matching nodes"`
+	OnlyMainContent *FlexBool  `json:"only_main_content,omitempty" jsonschema:"main-content only"`
+	Profile         string     `json:"profile,omitempty" jsonschema:"header profile: default, chrome, or firefox"`
+	Cookies         string     `json:"cookies,omitempty" jsonschema:"raw Cookie header value"`
 }
 
 // ScrapeOut is the scrape_url output.
@@ -66,17 +66,17 @@ func handleScrape(d Deps) func(context.Context, *sdk.CallToolRequest, ScrapeIn) 
 		}
 		useCache := true
 		if in.UseCache != nil {
-			useCache = *in.UseCache
+			useCache = bool(*in.UseCache)
 		}
 		var onlyMain bool
 		if in.OnlyMainContent != nil {
-			onlyMain = *in.OnlyMainContent
+			onlyMain = bool(*in.OnlyMainContent)
 		}
 		res, err := scrape.Run(ctx, d.ScrapeDeps, in.URL, scrape.Options{
 			Schema: sch, Render: in.Render, Provider: d.DefaultProvider,
 			Model: d.DefaultModel, MaxCost: d.MaxCost, UseCache: useCache,
 			PageFormat: in.PageFormat,
-			Scope:      clean.Scope{Include: in.Include, Exclude: in.Exclude, OnlyMainContent: onlyMain},
+			Scope:      clean.Scope{Include: []string(in.Include), Exclude: []string(in.Exclude), OnlyMainContent: onlyMain},
 			Profile:    in.Profile, Cookies: in.Cookies,
 		})
 		if err != nil {
@@ -108,12 +108,17 @@ func handleScrape(d Deps) func(context.Context, *sdk.CallToolRequest, ScrapeIn) 
 // CrawlIn is the crawl_site input. Set only RunID to poll a previous run
 // (status path: zero extractor calls).
 type CrawlIn struct {
-	URL      string         `json:"url,omitempty" jsonschema:"seed URL for a fresh crawl"`
-	MaxPages int            `json:"max_pages,omitempty" jsonschema:"max pages to claim and fetch"`
-	MaxDepth int            `json:"max_depth,omitempty" jsonschema:"max link depth from seed"`
-	SameHost *bool          `json:"same_host,omitempty" jsonschema:"follow only same-host links (default true)"`
-	Schema   map[string]any `json:"schema,omitempty" jsonschema:"JSON Schema object for extraction"`
-	RunID    string         `json:"run_id,omitempty" jsonschema:"poll a previous run instead of crawling"`
+	URL             string     `json:"url,omitempty" jsonschema:"seed URL for a fresh crawl"`
+	MaxPages        FlexInt    `json:"max_pages,omitempty" jsonschema:"max pages to claim and fetch"`
+	MaxDepth        FlexInt    `json:"max_depth,omitempty" jsonschema:"max link depth from seed"`
+	SameHost        *FlexBool  `json:"same_host,omitempty" jsonschema:"follow only same-host links (default true)"`
+	PathPrefix      string     `json:"path_prefix,omitempty" jsonschema:"only follow links under this path prefix"`
+	Include         StringList `json:"include,omitempty" jsonschema:"URL globs to include, e.g. **/docs/** (** crosses /, * stays in one segment)"`
+	Exclude         StringList `json:"exclude,omitempty" jsonschema:"URL globs to exclude (wins over include)"`
+	AllowSubdomains *FlexBool  `json:"allow_subdomains,omitempty" jsonschema:"follow links into subdomains of the seed host"`
+	NoSitemap       *FlexBool  `json:"no_sitemap,omitempty" jsonschema:"skip sitemap seed expansion"`
+	Schema          FlexMap    `json:"schema,omitempty" jsonschema:"JSON Schema object for extraction"`
+	RunID           string     `json:"run_id,omitempty" jsonschema:"poll a previous run instead of crawling"`
 }
 
 // CrawlOut is the crawl_site output (fresh run and status poll share it).
@@ -124,6 +129,15 @@ type CrawlOut struct {
 	Errors       int            `json:"errors,omitempty" jsonschema:"pages errored"`
 	Status       string         `json:"status" jsonschema:"run status"`
 	Usage        map[string]any `json:"usage,omitempty" jsonschema:"accumulated LLM usage"`
+}
+
+// flexBool dereferences an optional bool input with a default
+// (same_host nil→true; the scope bools nil→false).
+func flexBool(b *FlexBool, def bool) bool {
+	if b == nil {
+		return def
+	}
+	return bool(*b)
 }
 
 func handleCrawl(d Deps) func(context.Context, *sdk.CallToolRequest, CrawlIn) (*sdk.CallToolResult, CrawlOut, error) {
@@ -144,14 +158,12 @@ func handleCrawl(d Deps) func(context.Context, *sdk.CallToolRequest, CrawlIn) (*
 			}, nil
 		}
 
-		sch, err := crawlSchema(in.Schema)
+		sch, err := crawlSchema(map[string]any(in.Schema))
 		if err != nil {
 			return nil, CrawlOut{}, err
 		}
-		sameHost := true
-		if in.SameHost != nil {
-			sameHost = *in.SameHost
-		}
+		sameHost := flexBool(in.SameHost, true)
+		allowSubdomains, noSitemap := flexBool(in.AllowSubdomains, false), flexBool(in.NoSitemap, false)
 		key := ""
 		if d.ScrapeDeps.APIKeyFor != nil {
 			key = d.ScrapeDeps.APIKeyFor(d.DefaultProvider)
@@ -175,8 +187,11 @@ func handleCrawl(d Deps) func(context.Context, *sdk.CallToolRequest, CrawlIn) (*
 			}
 		}
 		res, err := crawl.Run(ctx, crawl.Options{
-			SeedURL: in.URL, Schema: sch, MaxPages: in.MaxPages, MaxDepth: in.MaxDepth,
-			SameHost: sameHost, Format: "jsonl", Out: os.DevNull, RunID: runID,
+			SeedURL: in.URL, Schema: sch, MaxPages: int(in.MaxPages), MaxDepth: int(in.MaxDepth),
+			SameHost: sameHost, PathPrefix: in.PathPrefix,
+			Include: []string(in.Include), Exclude: []string(in.Exclude),
+			AllowSubdomains: allowSubdomains, NoSitemap: noSitemap,
+			Format: "jsonl", Out: os.DevNull, RunID: runID,
 			Provider: d.DefaultProvider, Model: d.DefaultModel, MaxCost: d.MaxCost,
 			DB: d.DB, Extractor: ex, Progress: progress,
 		})
@@ -216,26 +231,39 @@ func runUsage(info store.RunInfo) map[string]any {
 		"prompt_tokens":     info.PromptTokens,
 		"completion_tokens": info.CompletionTokens,
 		"usd_estimate":      info.USDEstimate,
+		"fetch_pages":       info.FetchPages,
+		"fetch_bytes":       info.FetchBytes,
+		"fetch_ms":          info.FetchMs,
 	}
 }
 
 // --- extract_structured ---
 
-// ExtractIn is the extract_structured input (no fetch).
+// ExtractIn is the extract_structured input (no fetch). Schema and
+// Prompt are mutually exclusive: schema validates structured output,
+// prompt returns plain text with no validator.
 type ExtractIn struct {
-	Content     string         `json:"content" jsonschema:"HTML or markdown source to extract from"`
-	ContentType string         `json:"content_type,omitempty" jsonschema:"html or markdown (default html)"`
-	Schema      map[string]any `json:"schema" jsonschema:"JSON Schema object (required)"`
+	Content     string  `json:"content" jsonschema:"HTML or markdown source to extract from"`
+	ContentType string  `json:"content_type,omitempty" jsonschema:"html or markdown (default html)"`
+	Schema      FlexMap `json:"schema,omitempty" jsonschema:"JSON Schema object (required unless prompt is set)"`
+	Prompt      string  `json:"prompt,omitempty" jsonschema:"free-text instruction; returns plain text with no schema"`
 }
 
 // ExtractOut is the extract_structured output.
 type ExtractOut struct {
-	Extracted map[string]any `json:"extracted" jsonschema:"extracted record"`
+	Extracted map[string]any `json:"extracted,omitempty" jsonschema:"extracted record (with schema)"`
+	Content   string         `json:"content,omitempty" jsonschema:"plain-text result (with prompt)"`
 	Usage     map[string]any `json:"usage,omitempty" jsonschema:"LLM usage"`
 }
 
 func handleExtract(d Deps) func(context.Context, *sdk.CallToolRequest, ExtractIn) (*sdk.CallToolResult, ExtractOut, error) {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in ExtractIn) (*sdk.CallToolResult, ExtractOut, error) {
+		if in.Prompt != "" && len(in.Schema) > 0 {
+			return nil, ExtractOut{}, fmt.Errorf("mcp: extract_structured: prompt and schema are mutually exclusive")
+		}
+		if in.Prompt != "" {
+			return extractPrompt(ctx, d, in)
+		}
 		if len(in.Schema) == 0 {
 			return nil, ExtractOut{}, fmt.Errorf("mcp: extract_structured: schema is required")
 		}

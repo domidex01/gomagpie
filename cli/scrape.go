@@ -3,11 +3,9 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"gomagpie/clean"
 	"gomagpie/config"
-	"gomagpie/crawl"
 	"gomagpie/extract"
 	"gomagpie/scrape"
 	"gomagpie/store"
@@ -150,17 +148,7 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		Vertical: o.Vertical,
 	})
 	if err != nil {
-		switch {
-		case errors.Is(err, scrape.ErrMissingKey):
-			return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
-		case errors.Is(err, crawl.ErrCostCeiling):
-			return fail(6, "cost ceiling exceeded: %v", err)
-		case errors.Is(err, clean.ErrQuality):
-			return fail(8, "%s", qualityMessage(err, rawURL))
-		case errors.Is(err, vertical.ErrURLMismatch):
-			return fail(2, "%s", err.Error())
-		}
-		return err
+		return scrapeExit(err, rawURL, provider)
 	}
 	if res.Vertical != "" {
 		vdoc, merr := verticalDoc(res)

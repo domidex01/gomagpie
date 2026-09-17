@@ -24,7 +24,8 @@ func newServeCmd() *cobra.Command {
 		Short: "Serve the pipeline over MCP (stdio or Streamable HTTP)",
 		Long: `Serve gomagpie tools over MCP.
 
-Tools: scrape_url, crawl_site, extract_structured, get_cached_selectors.
+Tools: scrape_url, crawl_site, extract_structured, get_cached_selectors,
+batch, map, summarize, diff, brand, list_extractors, vertical_scrape.
 
 crawl_site runs synchronously to completion (no background jobs): keep
 MaxPages bounded or use HTTP mode, and set generous client timeouts for

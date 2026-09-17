@@ -1,0 +1,14 @@
+{
+  "colors": [
+    "#1a2b3c",
+    "#ff6600",
+    "#ffffff"
+  ],
+  "fonts": [
+    "Arial",
+    "Helvetica",
+    "Inter",
+    "sans-serif"
+  ],
+  "logo": "https://shop.example.com/assets/logo.png"
+}

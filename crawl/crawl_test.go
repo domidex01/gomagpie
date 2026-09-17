@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -331,10 +332,12 @@ func TestLinks_SameHostAndDepth(t *testing.T) {
 <a href="http://other.com/x">ext</a>
 </body></html>`
 	fr2 := NewFrontier(db, NewFilter(), "r1")
-	if n, err := fr2.ExtractLinks([]byte(html), "http://ex.com/", 0, 0, true); err != nil || n != 0 {
+	// Scope arg (Phase D): SameHost-only scope preserves the old exact-host
+	// behavior this test locked in.
+	if n, err := fr2.ExtractLinks([]byte(html), "http://ex.com/", 0, 0, Scope{SameHost: true}); err != nil || n != 0 {
 		t.Fatalf("depth-gated = %d,%v want 0", n, err)
 	}
-	if n, err := fr2.ExtractLinks([]byte(html), "http://ex.com/", 0, 1, true); err != nil || n != 2 {
+	if n, err := fr2.ExtractLinks([]byte(html), "http://ex.com/", 0, 1, Scope{SameHost: true}); err != nil || n != 2 {
 		t.Fatalf("same-host = %d,%v want 2", n, err)
 	}
 	claimed, err := fr2.Claim(10)
@@ -765,5 +768,197 @@ func TestCrawl_QualityCountedNotCached(t *testing.T) {
 	}
 	if _, ok, gerr := db.GetSelectors(strings.ToLower(u.Host), selectorHash(mustTestSchema(t))); gerr == nil && ok {
 		t.Error("selector cache written despite quality failure path")
+	}
+}
+
+// --- Phase D additions: scope-filtered frontier, NoSitemap, warn-and-
+// proceed sitemap seed expansion. Integration runs ride the same bare
+// NewStaticFetcher constructor as the pre-existing suite above; the new
+// SECURITY assertions live in fetch/ssrf_test.go with explicit options.
+// ---
+
+// scopeHTML links every scope-relevant shape: in-prefix, out-of-prefix,
+// binary asset, asset smuggled via query, subdomain, foreign host, utm'd.
+func scopeHTML() []byte {
+	return []byte(`<html><body>
+<a href="/docs/a">in</a>
+<a href="/api/b">out-prefix</a>
+<a href="/x.pdf">pdf</a>
+<a href="/f.pdf?dl=1">pdf-query</a>
+<a href="http://sub.ex.com/docs/c">sub</a>
+<a href="http://other.com/docs/d">foreign</a>
+<a href="/docs/e?x=1&utm_source=t">canonical</a>
+</body></html>`)
+}
+
+func TestLinks_ScopeFilter(t *testing.T) {
+	db := openCrawlDB(t)
+	fr := NewFrontier(db, NewFilter(), "r1")
+	scope, err := CompileScope(true, true, "/docs", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := fr.ExtractLinks(scopeHTML(), "http://ex.com/docs/", 0, 3, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("enqueued = %d, want 3 (docs/a, sub/docs/c, docs/e)", n)
+	}
+	claimed, err := fr.Claim(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, c := range claimed {
+		got[c.URL] = c.Depth
+		if c.Depth != 1 {
+			t.Errorf("link %s depth = %d, want 1", c.URL, c.Depth)
+		}
+	}
+	for _, want := range []string{"http://ex.com/docs/a", "http://sub.ex.com/docs/c", "http://ex.com/docs/e?x=1"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("missing in-scope link %s (got %v)", want, got)
+		}
+	}
+	for _, banned := range []string{"http://ex.com/api/b", "http://ex.com/x.pdf", "http://ex.com/f.pdf?dl=1", "http://other.com/docs/d"} {
+		if _, ok := got[banned]; ok {
+			t.Errorf("out-of-scope link %s enqueued", banned)
+		}
+	}
+}
+
+// captureStderr swaps os.Stderr for one call (warn-and-proceed asserts).
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	re, we, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = we
+	fn()
+	if err := we.Close(); err != nil {
+		t.Errorf("close stderr pipe: %v", err)
+	}
+	os.Stderr = old
+	out, err := io.ReadAll(re)
+	if err != nil {
+		t.Fatalf("read stderr pipe: %v", err)
+	}
+	return string(out)
+}
+
+// sitemapSite builds an origin whose sitemap body can reference the
+// runtime-random server URL: baseURL is captured by the handlers and
+// assigned before any request is served.
+type sitemapSite struct {
+	*origin
+	baseURL string
+}
+
+func newSitemapSite(t *testing.T, robots string) *sitemapSite {
+	t.Helper()
+	s := &sitemapSite{origin: &origin{hits: map[string]int{}}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.hits[r.URL.Path]++
+		s.mu.Unlock()
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte(robots)) //nolint:errcheck // httptest local
+		case "/sitemap.xml":
+			_, _ = w.Write([]byte(urlsetOf( //nolint:errcheck // httptest local; short write unactionable
+				s.baseURL+"/docs/a",
+				s.baseURL+"/api/b",
+			))) //nolint:errcheck // httptest local
+		case "/docs/a", "/api/b", "/":
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(itemPage())) //nolint:errcheck // httptest local
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	s.srv = httptest.NewServer(mux)
+	s.baseURL = s.srv.URL
+	t.Cleanup(s.srv.Close)
+	return s
+}
+
+func TestCrawl_NoSitemapZeroFetch(t *testing.T) {
+	s := newSitemapSite(t, "User-agent: *\nDisallow:\nSitemap: /sitemap.xml\n")
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+	res, err := Run(context.Background(), Options{
+		SeedURL: s.srv.URL + "/", Schema: mustTestSchema(t),
+		MaxPages: 5, MaxDepth: 1, SameHost: true,
+		FetchWorkers: 2, Rate: 1000, Format: "jsonl", Out: filepath.Join(t.TempDir(), "r.jsonl"),
+		DB: db, Extractor: fx, NoSitemap: true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.PagesOK < 1 {
+		t.Errorf("pages_ok = %d, want ≥1 (crawl itself must still work)", res.PagesOK)
+	}
+	if n := s.count("/sitemap.xml"); n != 0 {
+		t.Errorf("sitemap fetches = %d, want 0 with NoSitemap", n)
+	}
+}
+
+func TestCrawl_SeedExpansionScoped(t *testing.T) {
+	s := newSitemapSite(t, "User-agent: *\nDisallow:\nSitemap: /sitemap.xml\n")
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+	res, err := Run(context.Background(), Options{
+		SeedURL: s.srv.URL + "/", Schema: mustTestSchema(t),
+		MaxPages: 5, MaxDepth: 0, SameHost: true,
+		FetchWorkers: 2, Rate: 1000, Format: "jsonl", Out: filepath.Join(t.TempDir(), "r.jsonl"),
+		DB: db, Extractor: fx, PathPrefix: "/docs",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Seed "/" (operator's choice) is fetched; /docs/a came from the
+	// expansion and is in-prefix; /api/b is out-of-prefix → never enqueued.
+	if n := s.count("/docs/a"); n < 1 {
+		t.Errorf("/docs/a fetches = %d, want ≥1 (in-prefix expansion enqueued)", n)
+	}
+	if n := s.count("/api/b"); n != 0 {
+		t.Errorf("/api/b fetches = %d, want 0 (out-of-prefix expansion dropped)", n)
+	}
+	if res.PagesErr != 0 {
+		t.Errorf("pages_err = %d, want 0", res.PagesErr)
+	}
+}
+
+func TestCrawl_SeedExpansionWarnProceed(t *testing.T) {
+	// robots.txt advertises /sitemap.xml which 404s: expansion errors, the
+	// crawl proceeds seed-only with a stderr warning — never aborts.
+	o := newSiteOrigin(t, map[string]string{
+		"/":         itemPage(),
+		"/onlypage": itemPage(),
+	}, "User-agent: *\nDisallow:\nSitemap: /sitemap.xml\n")
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+	var res Result
+	var rerr error
+	stderr := captureStderr(t, func() {
+		res, rerr = Run(context.Background(), Options{
+			SeedURL: o.srv.URL + "/onlypage", Schema: mustTestSchema(t),
+			MaxPages: 5, MaxDepth: 0, SameHost: true,
+			FetchWorkers: 2, Rate: 1000, Format: "jsonl", Out: filepath.Join(t.TempDir(), "r.jsonl"),
+			DB: db, Extractor: fx,
+		})
+	})
+	if rerr != nil {
+		t.Fatalf("Run: %v (expansion errors must warn, not abort)", rerr)
+	}
+	if res.PagesOK != 1 {
+		t.Errorf("pages_ok = %d, want 1 (seed-only)", res.PagesOK)
+	}
+	if !strings.Contains(stderr, "continuing seed-only") {
+		t.Errorf("stderr %q missing 'continuing seed-only' warning", stderr)
 	}
 }

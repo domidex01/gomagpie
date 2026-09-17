@@ -47,13 +47,39 @@ Zen `/responses`-only models are unsupported (different API shape).
 | Command | Action |
 | :-- | :-- |
 | `magpie scrape <url> [--schema f] [--render auto\|static\|browser] [--provider …] [--model …] [--format json\|jsonl] [--max-cost usd] [--out f]` | Fetch → clean → extract one URL |
-| `magpie extract [--schema f] [--content-type html\|markdown]` | Extract from stdin/file, no fetch |
-| `magpie crawl <url> --schema f [--exporter-cmd prog]` | BFS crawl + extract; tee records as JSONL to prog's stdin |
+| `magpie extract [--schema f \| --prompt t] [--content-type html\|markdown]` | Extract from stdin/file, no fetch (prompt = plain text, no schema) |
+| `magpie batch [urls...] [--file f] [--concurrency 8] [--format jsonl\|json]` | Scrape ≤100 URLs, one ok/error record each (markdown only) |
+| `magpie map <site> [--format lines\|json]` | List sitemap-derived page URLs (BFS to depth 5, gzip + entity aware; partial results on dead children or a 25s budget, flagged `truncated`) |
+| `magpie summarize <url> [--max-sentences 3] [--provider …]` | Summarize in ≤N sentences |
+| `magpie diff <url> --against <file>` | Word-level diff vs a markdown snapshot |
+| `magpie brand <url>` | Brand colors, fonts, logo, favicon (zero LLM) |
+| `magpie vertical [--list] [<url> --name]` | Zero-LLM typed extraction |
+| `magpie crawl <url> --schema f [--path-prefix /docs] [--include '**/docs/**'] [--exclude '**/api/**'] [--allow-subdomains] [--no-sitemap] [--exporter-cmd prog]` | BFS crawl + extract, scoped to matching links only; binary assets (pdf/images/video/fonts/archives) never enqueue; sitemap expansion is scope-filtered and best-effort; tee records as JSONL to prog's stdin |
 | `magpie serve [--transport stdio\|http] [--addr :8080]` | Serve the pipeline over MCP |
 | `magpie build --with module@version --output f` | Compile a custom static binary with extra modules |
 | `magpie config set-key <provider> \| show` | Store key in OS keyring / show redacted config |
 
-Exit codes: 0 ok · 1 runtime · 2 usage · 3 all-failed · 6 cost ceiling · 7 credentials.
+Exit codes: 0 ok · 1 runtime · 2 usage (incl. non-public/SSRF-rejected URLs) · 3 all-failed · 4 partial · 5 robots-blocked · 6 cost ceiling · 7 credentials · 8 quality-blocked.
+
+## Network & security
+
+Every fetch (static, robots, crawl) goes through one guarded transport:
+
+- **SSRF guard (default-deny):** only public `http(s)` hosts; loopback,
+  private, link-local (cloud metadata), and multicast addresses are
+  rejected before dialing — including on every redirect hop and again on
+  the connected peer IP (DNS-rebind safe). Rejections wrap a typed
+  sentinel and exit 2. `file://` URLs are gated behind
+  `GOMAGPIE_ALLOW_FILE=1`.
+- **`GOMAGPIE_PROXY=http(s)://host:port`** routes all traffic through one
+  proxy (wins over the standard `HTTP_PROXY`/`HTTPS_PROXY` env, which is
+  honored otherwise); `NO_PROXY` entries (exact or `.suffix` host match,
+  `*` = all) bypass it. Invalid values fail loudly before any request.
+- **Body cap:** 50 MB on the decoded stream, so gzip bombs are truncated,
+  not downloaded.
+- **Run telemetry:** `run_history` rows accumulate `fetch_pages`,
+  `fetch_bytes`, and `fetch_ms` next to LLM tokens/cost; databases created
+  before Phase D gain the columns automatically on open.
 
 ## Checks
 
@@ -84,8 +110,15 @@ Claude Desktop config (`{ "mcpServers": { "gomagpie": {
 | :-- | :-- |
 | `scrape_url` | Fetch → clean → extract one URL (schema optional) |
 | `crawl_site` | Crawl a site, or poll a previous run via `run_id` (with progress) |
-| `extract_structured` | Extract from HTML/markdown, no fetch |
+| `extract_structured` | Extract from HTML/markdown, no fetch (schema) or plain text (prompt) |
 | `get_cached_selectors` | List cached selectors for a domain |
+| `batch` | Scrape ≤100 URLs with bounded concurrency (markdown only, zero LLM) |
+| `map` | List sitemap-derived URLs for a site |
+| `summarize` | Summarize one URL in ≤N sentences |
+| `diff` | Word-level diff of a URL vs a previous snapshot |
+| `brand` | Brand colors, fonts, logo, favicon (zero LLM) |
+| `list_extractors` | List zero-LLM vertical extractors |
+| `vertical_scrape` | Extract one URL with a named vertical (zero LLM) |
 
 HTTP mode: `magpie serve --transport http --addr 127.0.0.1:8089`.
 Details: `magpie serve --help`.
