@@ -91,6 +91,20 @@ func Build(ctx context.Context, o BuildOptions) error {
 	if sum, err := os.ReadFile(filepath.Join(root, "go.sum")); err == nil {
 		_ = os.WriteFile(filepath.Join(dir, "go.sum"), sum, 0o600) //nolint:errcheck // build fails loudly below without it
 	}
+	withMods := make([]string, 0, len(o.With))
+	for _, w := range o.With {
+		withMods = append(withMods, strings.SplitN(w, "@", 2)[0])
+	}
+	// main.go must exist BEFORE go get: with only a go.mod present, go get
+	// records the module as an indirect requirement and the final go build
+	// then fails with "updates to go.mod needed".
+	src, err := renderMain(withMods)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0o600); err != nil {
+		return fmt.Errorf("build: write main.go: %w", err)
+	}
 	for _, w := range o.With {
 		// NOTE: the only network path in the default suite's neighborhood —
 		// remote --with is manual smoke only, never a Go test.
@@ -98,16 +112,13 @@ func Build(ctx context.Context, o BuildOptions) error {
 			return err
 		}
 	}
-	withMods := make([]string, 0, len(o.With))
-	for _, w := range o.With {
-		withMods = append(withMods, strings.SplitN(w, "@", 2)[0])
-	}
-	src, err := renderMain(withMods)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0o600); err != nil {
-		return fmt.Errorf("build: write main.go: %w", err)
+	if len(o.With) > 0 {
+		// go get records new modules as // indirect regardless of main.go's
+		// imports; go build refuses that state ("updates to go.mod needed").
+		// tidy reclassifies them to direct and makes the build deterministic.
+		if err := run("go", "mod", "tidy"); err != nil {
+			return err
+		}
 	}
 	absOut, err := filepath.Abs(o.Output)
 	if err != nil {
