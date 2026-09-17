@@ -83,131 +83,193 @@ type domainState struct {
 	cachedPages int // pages served from cache since last null-rate flush
 }
 
+// crawlContext carries the run-wide collaborators shared by Run's phases
+// (setup, seeding, pipeline stages, heal, finish) so helpers take one
+// receiver instead of a parameter list. Pure refactor of the former
+// ~500-line Run — no behavior change.
+type crawlContext struct {
+	db         *store.DB
+	opts       Options
+	runID      string
+	maxPages   int
+	maxDepth   int
+	format     string
+	scope      Scope
+	schemaHash string
+	required   []string
+	filter     *Filter
+	checker    *Checker
+	limiters   *HostLimiters
+	gate       *core.BrowserGate
+	frontier   *Frontier
+	static     *fetch.StaticFetcher
+
+	outstanding atomic.Int64
+
+	// Per-domain cache/heal state, shared by the extract workers and the
+	// final null-rate flush.
+	domains   map[string]*domainState
+	domainsMu sync.Mutex
+}
+
 // Run executes a crawl: seed/resume → pump + pipeline → writer → FinishRun.
 func Run(ctx context.Context, opts Options) (Result, error) {
+	cc, err := newCrawlContext(opts)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := cc.begin(); err != nil {
+		return Result{}, err
+	}
+	static, err := fetch.NewStaticFetcher()
+	if err != nil {
+		return Result{}, err
+	}
+	cc.static = static
+	if err := cc.seed(ctx); err != nil {
+		return Result{}, err
+	}
+	return cc.runPipeline(ctx)
+}
+
+// newCrawlContext validates options and derives the run-wide defaults:
+// maxPages/maxDepth/format, compiled scope, schema hash, and run ID.
+func newCrawlContext(opts Options) (*crawlContext, error) {
 	if opts.DB == nil {
-		return Result{}, fmt.Errorf("crawl: nil DB")
+		return nil, fmt.Errorf("crawl: nil DB")
 	}
 	if opts.Schema == nil {
-		return Result{}, fmt.Errorf("crawl: nil schema")
+		return nil, fmt.Errorf("crawl: nil schema")
 	}
 	if opts.Extractor == nil {
-		return Result{}, fmt.Errorf("crawl: nil extractor")
+		return nil, fmt.Errorf("crawl: nil extractor")
 	}
-	maxPages := opts.MaxPages
-	if maxPages <= 0 {
-		maxPages = 100
+	cc := &crawlContext{db: opts.DB, opts: opts}
+	cc.maxPages = opts.MaxPages
+	if cc.maxPages <= 0 {
+		cc.maxPages = 100
 	}
 	// maxDepth <= 0 = unset → default 3; explicit seed-only passes -1.
-	maxDepth := opts.MaxDepth
-	if maxDepth <= 0 {
-		maxDepth = 3
+	cc.maxDepth = opts.MaxDepth
+	if cc.maxDepth <= 0 {
+		cc.maxDepth = 3
 	}
 	if opts.MaxDepth < 0 {
-		maxDepth = 0
+		cc.maxDepth = 0
 	}
-	format := opts.Format
-	if format == "" {
-		format = "jsonl"
+	cc.format = opts.Format
+	if cc.format == "" {
+		cc.format = "jsonl"
 	}
-	schemaHash := selector.SchemaHash(opts.Schema)
-	required := requiredFields(opts.Schema)
+	cc.schemaHash = selector.SchemaHash(opts.Schema)
+	cc.required = requiredFields(opts.Schema)
 	// Compile the frontier scope once; a bad glob fails before any I/O.
 	scope, err := CompileScope(opts.SameHost, opts.AllowSubdomains, opts.PathPrefix, opts.Include, opts.Exclude)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
-
-	db := opts.DB
-	runID := opts.RunID
-	if runID == "" {
-		runID = newRunID()
+	cc.scope = scope
+	cc.runID = opts.RunID
+	if cc.runID == "" {
+		cc.runID = newRunID()
 	}
 	if opts.Resume && opts.ResumeID != "" {
-		runID = opts.ResumeID
+		cc.runID = opts.ResumeID
 	}
-	filter := NewFilter()
-	if !opts.Resume {
-		if runID == "" {
-			runID = newRunID()
+	return cc, nil
+}
+
+// begin opens the run row (or resumes it) and rebuilds resume state:
+// inflight reset, visited-hash reload, outstanding count. Former Run
+// middle section, verbatim.
+func (c *crawlContext) begin() error {
+	c.filter = NewFilter()
+	if !c.opts.Resume {
+		if c.runID == "" {
+			c.runID = newRunID()
 		}
-		if err := db.BeginRun(runID, "crawl"); err != nil {
-			return Result{}, err
+		if err := c.db.BeginRun(c.runID, "crawl"); err != nil {
+			return err
 		}
 	} else {
-		if err := db.ResumeRun(runID); err != nil {
-			return Result{}, err
+		if err := c.db.ResumeRun(c.runID); err != nil {
+			return err
 		}
 	}
 
-	checker := NewChecker()
-	limiters := NewHostLimiters(opts.Rate, 3)
+	c.checker = NewChecker()
+	c.limiters = NewHostLimiters(c.opts.Rate, 3)
 
-	var outstanding atomic.Int64
-	if opts.Resume {
-		if _, err := db.ResetInflight(runID); err != nil {
-			return Result{}, err
+	if c.opts.Resume {
+		if _, err := c.db.ResetInflight(c.runID); err != nil {
+			return err
 		}
-		hashes, err := db.LoadHashes(runID)
+		hashes, err := c.db.LoadHashes(c.runID)
 		if err != nil {
-			return Result{}, err
+			return err
 		}
 		for _, h := range hashes {
-			filter.Add(h)
+			c.filter.Add(h)
 		}
-		if p, _, _, _, err := db.CrawlStats(runID); err == nil {
-			outstanding.Add(int64(p))
+		if p, _, _, _, err := c.db.CrawlStats(c.runID); err == nil {
+			c.outstanding.Add(int64(p))
 		}
 	}
-	frontier := NewFrontier(db, filter, runID)
+	c.frontier = NewFrontier(c.db, c.filter, c.runID)
+	return nil
+}
 
-	staticFetcher, err := fetch.NewStaticFetcher()
+// seed enqueues the seed (robots-checked first) plus sitemap expansion on
+// fresh runs; resume runs start from the persisted frontier instead.
+// Former Run seed block, verbatim.
+func (c *crawlContext) seed(ctx context.Context) error {
+	if c.opts.Resume {
+		return nil
+	}
+	seedHost, herr := hostOf(c.opts.SeedURL)
+	if herr != nil {
+		seedHost = c.opts.SeedURL
+	}
+	if isHTTP(c.opts.SeedURL) && !c.opts.IgnoreRobots {
+		allowed, err := c.checker.Allowed(ctx, c.opts.SeedURL)
+		if err != nil || !allowed {
+			if ferr := c.db.FinishRun(c.runID, 0, 0, "robots_blocked"); ferr != nil {
+				fmt.Fprintf(os.Stderr, "warning: finish run: %v\n", ferr)
+			}
+			if err != nil && errors.Is(err, ErrRobotsUnreachable) {
+				return fmt.Errorf("crawl: seed %s: %w", seedHost, ErrRobotsBlocked)
+			}
+			return fmt.Errorf("crawl: seed %s: %w", seedHost, ErrRobotsBlocked)
+		}
+	}
+	seeds := []string{c.opts.SeedURL}
+	if isHTTP(c.opts.SeedURL) && !c.opts.NoSitemap {
+		// Expand the seed through the sitemap (page URLs, capped at
+		// maxPages) instead of enqueuing raw sitemap-XML URLs. Expansion
+		// NEVER fails the crawl: warn and proceed seed-only — a site
+		// without robots.txt/sitemap.xml crawls exactly as before.
+		expanded, _, serr := ListSitemapURLs(ctx, c.static, c.opts.SeedURL)
+		if serr != nil {
+			fmt.Fprintf(os.Stderr, "crawl: sitemap expansion: %v; continuing seed-only\n", serr)
+		} else {
+			if len(expanded) > c.maxPages {
+				expanded = expanded[:c.maxPages]
+			}
+			seeds = append(seeds, scopeFilterExpansion(c.scope, c.opts.SeedURL, expanded)...)
+		}
+	}
+	n, err := c.frontier.Add(seeds, 0)
 	if err != nil {
-		return Result{}, err
+		return err
 	}
+	c.outstanding.Add(int64(n))
+	return nil
+}
 
-	// Seed (fresh runs only), robots-checked first; sitemap expansion is
-	// best-effort and never fails the crawl.
-	if !opts.Resume {
-		seedHost, herr := hostOf(opts.SeedURL)
-		if herr != nil {
-			seedHost = opts.SeedURL
-		}
-		if isHTTP(opts.SeedURL) && !opts.IgnoreRobots {
-			allowed, err := checker.Allowed(ctx, opts.SeedURL)
-			if err != nil || !allowed {
-				if ferr := db.FinishRun(runID, 0, 0, "robots_blocked"); ferr != nil {
-					fmt.Fprintf(os.Stderr, "warning: finish run: %v\n", ferr)
-				}
-				if err != nil && errors.Is(err, ErrRobotsUnreachable) {
-					return Result{}, fmt.Errorf("crawl: seed %s: %w", seedHost, ErrRobotsBlocked)
-				}
-				return Result{}, fmt.Errorf("crawl: seed %s: %w", seedHost, ErrRobotsBlocked)
-			}
-		}
-		seeds := []string{opts.SeedURL}
-		if isHTTP(opts.SeedURL) && !opts.NoSitemap {
-			// Expand the seed through the sitemap (page URLs, capped at
-			// maxPages) instead of enqueuing raw sitemap-XML URLs. Expansion
-			// NEVER fails the crawl: warn and proceed seed-only — a site
-			// without robots.txt/sitemap.xml crawls exactly as before.
-			expanded, _, serr := ListSitemapURLs(ctx, staticFetcher, opts.SeedURL)
-			if serr != nil {
-				fmt.Fprintf(os.Stderr, "crawl: sitemap expansion: %v; continuing seed-only\n", serr)
-			} else {
-				if len(expanded) > maxPages {
-					expanded = expanded[:maxPages]
-				}
-				seeds = append(seeds, scopeFilterExpansion(scope, opts.SeedURL, expanded)...)
-			}
-		}
-		n, err := frontier.Add(seeds, 0)
-		if err != nil {
-			return Result{}, err
-		}
-		outstanding.Add(int64(n))
-	}
-
+// runPipeline wires the fetch/clean/extract stages, pumps the frontier
+// into core.Run, and delegates result handling to finish. Former Run
+// stage wiring, verbatim.
+func (c *crawlContext) runPipeline(ctx context.Context) (Result, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -220,20 +282,20 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			if runCtx.Err() != nil {
 				return
 			}
-			if claimed >= maxPages {
+			if claimed >= c.maxPages {
 				return
 			}
-			batch := maxPages - claimed
+			batch := c.maxPages - claimed
 			if batch > 32 {
 				batch = 32
 			}
-			rows, err := db.Claim(runID, batch)
+			rows, err := c.db.Claim(c.runID, batch)
 			if err != nil {
 				pumpErr.Store(err)
 				return
 			}
 			if len(rows) == 0 {
-				if outstanding.Load() == 0 {
+				if c.outstanding.Load() == 0 {
 					return
 				}
 				time.Sleep(50 * time.Millisecond)
@@ -250,262 +312,10 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 	}()
 
-	gate := core.NewBrowserGate(2)
+	c.gate = core.NewBrowserGate(2)
+	c.domains = map[string]*domainState{}
 
-	domains := map[string]*domainState{}
-	var domainsMu sync.Mutex
-
-	// checkCeiling aborts before LLM spend when running+projected > max.
-	checkCeiling := func(promptText string) error {
-		if opts.MaxCost <= 0 {
-			return nil
-		}
-		running, err := db.RunCost(runID)
-		if err != nil {
-			return err // fail closed
-		}
-		proj := extract.ProjectedCost(opts.Model, promptText)
-		if proj == 0 {
-			if toks := extract.EstimatePromptTokens(promptText); toks > 0 {
-				proj = float64(toks) / 1e6 * 2.00
-			}
-		}
-		if running+proj > opts.MaxCost {
-			return ErrCostCeiling
-		}
-		return nil
-	}
-
-	extractOne := func(ctx context.Context, markdown string, sidecar json.RawMessage, purpose, extra string) (extract.ExtractResult, error) {
-		if err := checkCeiling(markdown + string(sidecar)); err != nil {
-			return extract.ExtractResult{}, err
-		}
-		return opts.Extractor.Extract(ctx, extract.ExtractInput{
-			Markdown: markdown, StructuredData: sidecar,
-			Schema: opts.Schema, Purpose: purpose, PromptExtra: extra,
-		})
-	}
-
-	fetchFn := func(ctx context.Context, task core.FetchTask) (core.FetchedPage, error) {
-		if isHTTP(task.URL) && !opts.IgnoreRobots {
-			allowed, err := checker.Allowed(ctx, task.URL)
-			if err != nil || !allowed {
-				return core.FetchedPage{Task: task, Err: fmt.Errorf("crawl: robots disallow %s", task.URL)}, nil
-			}
-			if d := checker.CrawlDelay(ctx, task.URL); d > 0 {
-				if host, herr := hostOf(task.URL); herr == nil && host != "" {
-					limiters.SetFloor(host, d)
-				}
-			}
-		}
-		if host, herr := hostOf(task.URL); herr == nil && host != "" {
-			if err := limiters.Wait(ctx, host); err != nil {
-				return core.FetchedPage{}, err
-			}
-		}
-		var last *fetch.FetchResponse
-		fetchStart := time.Now()
-		resp, err := FetchWithRetry(ctx, func() (*fetch.FetchResponse, error) {
-			r, ferr := staticFetcher.Fetch(ctx, fetch.FetchRequest{URL: task.URL, Browser: opts.Browser})
-			// Reset on transport failure: qualityErr must classify the
-			// terminal outcome, never a stale response from an earlier try.
-			last = r
-			return r, ferr
-		})
-		if err != nil {
-			// Retry taxonomy (backoff.go) already ran: classify the outcome.
-			if qerr := qualityErr(ctx, task, last); qerr != nil {
-				return core.FetchedPage{Task: task, Err: qerr}, nil
-			}
-			return core.FetchedPage{Task: task, Err: err}, nil
-		}
-		if resp.StatusCode/100 != 2 {
-			if qerr := qualityErr(ctx, task, resp); qerr != nil {
-				return core.FetchedPage{Task: task, Err: qerr}, nil
-			}
-			return core.FetchedPage{Task: task, Err: classify(resp, nil)}, nil
-		}
-		if score, embedded := fetch.ScoreJSRequired(resp.HTML, resp.Headers); !embedded && fetch.NeedsBrowser(score) && isHTTP(task.URL) {
-			if err := gate.Acquire(ctx); err != nil {
-				return core.FetchedPage{}, err
-			}
-			bresp, berr := func() (*fetch.FetchResponse, error) {
-				defer gate.Release()
-				rod := fetch.NewRodFetcher()
-				defer func() { _ = rod.Close() }() //nolint:errcheck // teardown unactionable
-				return rod.Fetch(ctx, fetch.FetchRequest{URL: task.URL})
-			}()
-			if berr != nil {
-				return core.FetchedPage{Task: task, Err: berr}, nil
-			}
-			resp = bresp
-		}
-		// Fetch telemetry rides the run row next to LLM usage. Warn-only:
-		// a logging failure must never fail the page.
-		if lerr := db.LogFetch(runID, int64(len(resp.HTML)), time.Since(fetchStart).Milliseconds()); lerr != nil {
-			fmt.Fprintf(os.Stderr, "warning: log fetch: %v\n", lerr)
-		}
-		return core.FetchedPage{Task: task, Resp: resp}, nil
-	}
-
-	cleanFn := func(ctx context.Context, page core.FetchedPage) (core.Cleaned, error) {
-		if page.Err != nil || page.Resp == nil {
-			return core.Cleaned{Task: page.Task, Err: page.Err}, nil
-		}
-		html := page.Resp.HTML
-		finalURL := page.Resp.FinalURL
-		if finalURL == "" {
-			finalURL = page.Task.URL
-		}
-		sidecar := clean.HarvestSidecar(html)
-		// Link extraction ALWAYS (nav links live in boilerplate).
-		if links, err := frontier.ExtractLinks(html, finalURL, page.Task.Depth, maxDepth, scope); err == nil && links > 0 {
-			outstanding.Add(int64(links))
-		}
-		// Trafilatura only when the page will need an LLM.
-		// ponytail: one SQLite point read per page to decide (ceiling =
-		// negligible WAL read on the single conn).
-		needLLM := true
-		if doc, ok, err := db.GetSelectors(domainOf(finalURL), schemaHash); err == nil && ok {
-			needLLM = hasNonCacheable(doc, opts.Schema)
-		}
-		if !needLLM {
-			return core.Cleaned{Task: page.Task, Resp: page.Resp,
-				Page:    clean.CleanedPage{StructuredData: sidecar, FinalURL: finalURL},
-				Sidecar: sidecar}, nil
-		}
-		cleaned, err := clean.Clean(ctx, clean.RawPage{
-			HTML: html, URL: page.Task.URL, FinalURL: finalURL,
-			StatusCode: page.Resp.StatusCode, ContentType: page.Resp.Headers.Get("Content-Type"),
-		})
-		if err != nil {
-			return core.Cleaned{Task: page.Task, Err: err}, nil
-		}
-		return core.Cleaned{Task: page.Task, Resp: page.Resp, Page: cleaned, Sidecar: cleaned.StructuredData}, nil
-	}
-
-	extractFn := func(ctx context.Context, cl core.Cleaned) (core.PageResult, error) {
-		if cl.Err != nil {
-			return core.PageResult{Task: cl.Task, Err: cl.Err}, nil
-		}
-		finalURL := cl.Page.FinalURL
-		if finalURL == "" && cl.Resp != nil {
-			finalURL = cl.Resp.FinalURL
-		}
-		if finalURL == "" {
-			finalURL = cl.Task.URL
-		}
-		domain := domainOf(finalURL)
-		domainsMu.Lock()
-		st, ok := domains[domain]
-		if !ok {
-			st = &domainState{healer: selector.NewHealer(50, 0.30, 3)}
-			domains[domain] = st
-		}
-		domainsMu.Unlock()
-		st.mu.Lock()
-		defer st.mu.Unlock()
-
-		html := ""
-		if cl.Resp != nil {
-			html = string(cl.Resp.HTML)
-		}
-		// Load-once per domain per run.
-		if !st.loaded {
-			if raw, found, err := db.GetSelectors(domain, schemaHash); err == nil && found {
-				var doc selector.SelectorDoc
-				if jerr := json.Unmarshal([]byte(raw), &doc); jerr == nil {
-					st.doc = doc
-				}
-			}
-			st.loaded = true
-		}
-		hasDoc := len(st.doc.Fields) > 0
-
-		if hasDoc {
-			// Markdown for fill/heal LLM calls (may have skipped trafilatura).
-			md := cl.Page.Markdown
-			if md == "" && html != "" {
-				if cleaned, cerr := clean.Clean(ctx, clean.RawPage{HTML: []byte(html), URL: cl.Task.URL, FinalURL: finalURL}); cerr == nil {
-					md = cleaned.Markdown
-				}
-			}
-			applier := selector.NewApplier(st.doc, opts.Schema)
-			rec, nulls := applier.Apply(html, cl.Sidecar)
-			nullSet := map[string]bool{}
-			for _, f := range nulls {
-				nullSet[f] = true
-			}
-			var triggered []string
-			for _, f := range nulls {
-				if trig := st.healer.Observe(f, true); len(trig) > 0 {
-					triggered = append(triggered, trig...)
-				}
-			}
-			for f := range st.doc.Fields {
-				if !nullSet[f] {
-					if trig := st.healer.Observe(f, false); len(trig) > 0 {
-						triggered = append(triggered, trig...)
-					}
-				}
-			}
-			// Fill non-cacheable fields via per-page LLM.
-			if len(nulls) > 0 {
-				res, err := extractOne(ctx, md, cl.Sidecar, "extract", "")
-				if err != nil {
-					if errors.Is(err, ErrCostCeiling) {
-						return core.PageResult{}, err
-					}
-					// Degrade: emit cached fields only.
-					return core.PageResult{Task: cl.Task, Record: rec}, nil
-				}
-				for _, f := range nulls {
-					if v, present := res.Record[f]; present {
-						rec[f] = v
-					}
-				}
-				if validRequired(res.Record, required) {
-					st.healer.Retain(selector.SynthSample{URL: finalURL, HTML: html, Sidecar: cl.Sidecar, Truth: res.Record})
-				}
-			}
-			if len(triggered) > 0 {
-				healField(ctx, db, st, opts, domain, schemaHash, finalURL, html, md, cl.Sidecar, triggered, extractOne)
-			}
-			st.cachedPages++
-			if st.cachedPages%25 == 0 {
-				flushNullRates(db, st, domain, schemaHash)
-			}
-			return core.PageResult{Task: cl.Task, Record: rec}, nil
-		}
-
-		// Cold domain: direct LLM (Purpose synth) + retain + synthesize at N.
-		res, err := extractOne(ctx, cl.Page.Markdown, cl.Sidecar, "synth", "")
-		if err != nil {
-			if errors.Is(err, ErrCostCeiling) {
-				return core.PageResult{}, err
-			}
-			return core.PageResult{Task: cl.Task, Err: err}, nil
-		}
-		if validRequired(res.Record, required) {
-			st.healer.Retain(selector.SynthSample{URL: finalURL, HTML: html, Sidecar: cl.Sidecar, Truth: res.Record})
-			if len(st.healer.Samples()) >= 3 {
-				doc, serr := selector.Synthesize(ctx, st.healer.Samples(), opts.Schema, opts.Propose, nil)
-				if serr == nil {
-					doc.Domain = domain
-					if raw, merr := json.Marshal(doc); merr == nil {
-						if perr := db.PutSelectors(domain, schemaHash, string(raw), doc.SamplesUsed); perr != nil {
-							fmt.Fprintf(os.Stderr, "warning: cache selectors: %v\n", perr)
-						} else {
-							st.doc = doc
-						}
-					}
-				}
-			}
-		}
-		return core.PageResult{Task: cl.Task, Record: res.Record}, nil
-	}
-
-	w, err := newWriter(opts.Out, format, opts.Schema, db, runID)
+	w, err := newWriter(c.opts.Out, c.format, c.opts.Schema, c.db, c.runID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -516,80 +326,337 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			return
 		}
 		if r.Err != nil {
-			if merr := db.MarkError(runID, hashTask(r.Task), r.Err.Error()); merr != nil {
+			if merr := c.db.MarkError(c.runID, hashTask(r.Task), r.Err.Error()); merr != nil {
 				fmt.Fprintf(os.Stderr, "warning: mark error: %v\n", merr)
 			}
 		} else {
 			if werr := w.write(r); werr != nil {
 				sinkErr = werr
 				cancel()
-				if merr := db.MarkError(runID, hashTask(r.Task), werr.Error()); merr != nil {
+				if merr := c.db.MarkError(c.runID, hashTask(r.Task), werr.Error()); merr != nil {
 					fmt.Fprintf(os.Stderr, "warning: mark error: %v\n", merr)
 				}
-			} else if merr := db.MarkDone(runID, hashTask(r.Task)); merr != nil {
+			} else if merr := c.db.MarkDone(c.runID, hashTask(r.Task)); merr != nil {
 				fmt.Fprintf(os.Stderr, "warning: mark done: %v\n", merr)
-			} else if opts.OnRecord != nil {
-				opts.OnRecord(jsonRecord(r))
+			} else if c.opts.OnRecord != nil {
+				c.opts.OnRecord(jsonRecord(r))
 			}
 		}
-		outstanding.Add(-1)
+		c.outstanding.Add(-1)
 		doneCount++
-		if opts.Progress != nil {
-			opts.Progress(doneCount)
+		if c.opts.Progress != nil {
+			c.opts.Progress(doneCount)
 		}
 	}
 
 	cfg := core.DefaultPipelineConfig()
-	if opts.FetchWorkers > 0 {
-		cfg.FetchWorkers = opts.FetchWorkers
+	if c.opts.FetchWorkers > 0 {
+		cfg.FetchWorkers = c.opts.FetchWorkers
 	}
-	runErr := core.Run(runCtx, cfg, source, fetchFn, cleanFn, extractFn, sink)
+	runErr := core.Run(runCtx, cfg, source, c.fetchPage, c.cleanPage, c.extractPage, sink)
+	return c.finish(ctx, w, sinkErr, &pumpErr, runErr)
+}
 
+// finish flushes per-domain null rates, closes the writer, and records
+// the terminal run status (error / interrupted / finished). Former Run
+// result-handling tail, verbatim.
+func (c *crawlContext) finish(ctx context.Context, w *writer, sinkErr error, pumpErr *atomic.Value, runErr error) (Result, error) {
 	// Final null-rate flush per domain.
-	domainsMu.Lock()
-	for domain, st := range domains {
+	c.domainsMu.Lock()
+	for domain, st := range c.domains {
 		st.mu.Lock()
 		if st.loaded && len(st.doc.Fields) > 0 {
-			flushNullRates(db, st, domain, schemaHash)
+			c.flushNullRates(st, domain)
 		}
 		st.mu.Unlock()
 	}
-	domainsMu.Unlock()
+	c.domainsMu.Unlock()
 
 	if werr := w.close(); werr != nil && sinkErr == nil {
 		sinkErr = werr
 	}
 	finishWarn := func(status string) {
-		if ferr := db.FinishRun(runID, 0, 0, status); ferr != nil {
+		if ferr := c.db.FinishRun(c.runID, 0, 0, status); ferr != nil {
 			fmt.Fprintf(os.Stderr, "warning: finish run: %v\n", ferr)
 		}
 	}
 	if sinkErr != nil {
 		finishWarn("error")
-		return Result{RunID: runID}, sinkErr
+		return Result{RunID: c.runID}, sinkErr
 	}
 	if perr, ok := pumpErr.Load().(error); ok && perr != nil {
 		finishWarn("error")
-		return Result{RunID: runID}, perr
+		return Result{RunID: c.runID}, perr
 	}
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
 		finishWarn("error")
-		return Result{RunID: runID}, runErr
+		return Result{RunID: c.runID}, runErr
 	}
 
-	_, _, done, errs, serr := db.CrawlStats(runID)
+	_, _, done, errs, serr := c.db.CrawlStats(c.runID)
 	if serr != nil {
 		finishWarn("error")
-		return Result{RunID: runID}, serr
+		return Result{RunID: c.runID}, serr
 	}
 	status := "finished"
 	if ctx.Err() != nil || (runErr != nil && errors.Is(runErr, context.Canceled)) {
 		status = "interrupted"
 	}
-	if ferr := db.FinishRun(runID, done, errs, status); ferr != nil {
-		return Result{RunID: runID}, ferr
+	if ferr := c.db.FinishRun(c.runID, done, errs, status); ferr != nil {
+		return Result{RunID: c.runID}, ferr
 	}
-	return Result{RunID: runID, PagesOK: done, PagesErr: errs, Records: w.count()}, nil
+	return Result{RunID: c.runID, PagesOK: done, PagesErr: errs, Records: w.count()}, nil
+}
+
+func (c *crawlContext) fetchPage(ctx context.Context, task core.FetchTask) (core.FetchedPage, error) {
+	if isHTTP(task.URL) && !c.opts.IgnoreRobots {
+		allowed, err := c.checker.Allowed(ctx, task.URL)
+		if err != nil || !allowed {
+			return core.FetchedPage{Task: task, Err: fmt.Errorf("crawl: robots disallow %s", task.URL)}, nil
+		}
+		if d := c.checker.CrawlDelay(ctx, task.URL); d > 0 {
+			if host, herr := hostOf(task.URL); herr == nil && host != "" {
+				c.limiters.SetFloor(host, d)
+			}
+		}
+	}
+	if host, herr := hostOf(task.URL); herr == nil && host != "" {
+		if err := c.limiters.Wait(ctx, host); err != nil {
+			return core.FetchedPage{}, err
+		}
+	}
+	var last *fetch.FetchResponse
+	fetchStart := time.Now()
+	resp, err := FetchWithRetry(ctx, func() (*fetch.FetchResponse, error) {
+		r, ferr := c.static.Fetch(ctx, fetch.FetchRequest{URL: task.URL, Browser: c.opts.Browser})
+		// Reset on transport failure: qualityErr must classify the
+		// terminal outcome, never a stale response from an earlier try.
+		last = r
+		return r, ferr
+	})
+	if err != nil {
+		// Retry taxonomy (backoff.go) already ran: classify the outcome.
+		if qerr := qualityErr(ctx, task, last); qerr != nil {
+			return core.FetchedPage{Task: task, Err: qerr}, nil
+		}
+		return core.FetchedPage{Task: task, Err: err}, nil
+	}
+	if resp.StatusCode/100 != 2 {
+		if qerr := qualityErr(ctx, task, resp); qerr != nil {
+			return core.FetchedPage{Task: task, Err: qerr}, nil
+		}
+		return core.FetchedPage{Task: task, Err: classify(resp, nil)}, nil
+	}
+	if score, embedded := fetch.ScoreJSRequired(resp.HTML, resp.Headers); !embedded && fetch.NeedsBrowser(score) && isHTTP(task.URL) {
+		if err := c.gate.Acquire(ctx); err != nil {
+			return core.FetchedPage{}, err
+		}
+		bresp, berr := func() (*fetch.FetchResponse, error) {
+			defer c.gate.Release()
+			rod := fetch.NewRodFetcher()
+			defer func() { _ = rod.Close() }() //nolint:errcheck // teardown unactionable
+			return rod.Fetch(ctx, fetch.FetchRequest{URL: task.URL})
+		}()
+		if berr != nil {
+			return core.FetchedPage{Task: task, Err: berr}, nil
+		}
+		resp = bresp
+	}
+	// Fetch telemetry rides the run row next to LLM usage. Warn-only:
+	// a logging failure must never fail the page.
+	if lerr := c.db.LogFetch(c.runID, int64(len(resp.HTML)), time.Since(fetchStart).Milliseconds()); lerr != nil {
+		fmt.Fprintf(os.Stderr, "warning: log fetch: %v\n", lerr)
+	}
+	return core.FetchedPage{Task: task, Resp: resp}, nil
+}
+
+func (c *crawlContext) cleanPage(ctx context.Context, page core.FetchedPage) (core.Cleaned, error) {
+	if page.Err != nil || page.Resp == nil {
+		return core.Cleaned{Task: page.Task, Err: page.Err}, nil
+	}
+	html := page.Resp.HTML
+	finalURL := page.Resp.FinalURL
+	if finalURL == "" {
+		finalURL = page.Task.URL
+	}
+	sidecar := clean.HarvestSidecar(html)
+	// Link extraction ALWAYS (nav links live in boilerplate).
+	if links, err := c.frontier.ExtractLinks(html, finalURL, page.Task.Depth, c.maxDepth, c.scope); err == nil && links > 0 {
+		c.outstanding.Add(int64(links))
+	}
+	// Trafilatura only when the page will need an LLM.
+	// ponytail: one SQLite point read per page to decide (ceiling =
+	// negligible WAL read on the single conn).
+	needLLM := true
+	if doc, ok, err := c.db.GetSelectors(domainOf(finalURL), c.schemaHash); err == nil && ok {
+		needLLM = hasNonCacheable(doc, c.opts.Schema)
+	}
+	if !needLLM {
+		return core.Cleaned{Task: page.Task, Resp: page.Resp,
+			Page:    clean.CleanedPage{StructuredData: sidecar, FinalURL: finalURL},
+			Sidecar: sidecar}, nil
+	}
+	cleaned, err := clean.Clean(ctx, clean.RawPage{
+		HTML: html, URL: page.Task.URL, FinalURL: finalURL,
+		StatusCode: page.Resp.StatusCode, ContentType: page.Resp.Headers.Get("Content-Type"),
+	})
+	if err != nil {
+		return core.Cleaned{Task: page.Task, Err: err}, nil
+	}
+	return core.Cleaned{Task: page.Task, Resp: page.Resp, Page: cleaned, Sidecar: cleaned.StructuredData}, nil
+}
+
+// checkCeiling aborts before LLM spend when running+projected > max.
+func (c *crawlContext) checkCeiling(promptText string) error {
+	if c.opts.MaxCost <= 0 {
+		return nil
+	}
+	running, err := c.db.RunCost(c.runID)
+	if err != nil {
+		return err // fail closed
+	}
+	proj := extract.ProjectedCost(c.opts.Model, promptText)
+	if proj == 0 {
+		if toks := extract.EstimatePromptTokens(promptText); toks > 0 {
+			proj = float64(toks) / 1e6 * 2.00
+		}
+	}
+	if running+proj > c.opts.MaxCost {
+		return ErrCostCeiling
+	}
+	return nil
+}
+
+// extractOne runs one cost-checked LLM extraction against the schema.
+func (c *crawlContext) extractOne(ctx context.Context, markdown string, sidecar json.RawMessage, purpose, extra string) (extract.ExtractResult, error) {
+	if err := c.checkCeiling(markdown + string(sidecar)); err != nil {
+		return extract.ExtractResult{}, err
+	}
+	return c.opts.Extractor.Extract(ctx, extract.ExtractInput{
+		Markdown: markdown, StructuredData: sidecar,
+		Schema: c.opts.Schema, Purpose: purpose, PromptExtra: extra,
+	})
+}
+
+func (c *crawlContext) extractPage(ctx context.Context, cl core.Cleaned) (core.PageResult, error) {
+	if cl.Err != nil {
+		return core.PageResult{Task: cl.Task, Err: cl.Err}, nil
+	}
+	finalURL := cl.Page.FinalURL
+	if finalURL == "" && cl.Resp != nil {
+		finalURL = cl.Resp.FinalURL
+	}
+	if finalURL == "" {
+		finalURL = cl.Task.URL
+	}
+	domain := domainOf(finalURL)
+	c.domainsMu.Lock()
+	st, ok := c.domains[domain]
+	if !ok {
+		st = &domainState{healer: selector.NewHealer(50, 0.30, 3)}
+		c.domains[domain] = st
+	}
+	c.domainsMu.Unlock()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	html := ""
+	if cl.Resp != nil {
+		html = string(cl.Resp.HTML)
+	}
+	// Load-once per domain per run.
+	if !st.loaded {
+		if raw, found, err := c.db.GetSelectors(domain, c.schemaHash); err == nil && found {
+			var doc selector.SelectorDoc
+			if jerr := json.Unmarshal([]byte(raw), &doc); jerr == nil {
+				st.doc = doc
+			}
+		}
+		st.loaded = true
+	}
+	hasDoc := len(st.doc.Fields) > 0
+
+	if hasDoc {
+		// Markdown for fill/heal LLM calls (may have skipped trafilatura).
+		md := cl.Page.Markdown
+		if md == "" && html != "" {
+			if cleaned, cerr := clean.Clean(ctx, clean.RawPage{HTML: []byte(html), URL: cl.Task.URL, FinalURL: finalURL}); cerr == nil {
+				md = cleaned.Markdown
+			}
+		}
+		applier := selector.NewApplier(st.doc, c.opts.Schema)
+		rec, nulls := applier.Apply(html, cl.Sidecar)
+		nullSet := map[string]bool{}
+		for _, f := range nulls {
+			nullSet[f] = true
+		}
+		var triggered []string
+		for _, f := range nulls {
+			if trig := st.healer.Observe(f, true); len(trig) > 0 {
+				triggered = append(triggered, trig...)
+			}
+		}
+		for f := range st.doc.Fields {
+			if !nullSet[f] {
+				if trig := st.healer.Observe(f, false); len(trig) > 0 {
+					triggered = append(triggered, trig...)
+				}
+			}
+		}
+		// Fill non-cacheable fields via per-page LLM.
+		if len(nulls) > 0 {
+			res, err := c.extractOne(ctx, md, cl.Sidecar, "extract", "")
+			if err != nil {
+				if errors.Is(err, ErrCostCeiling) {
+					return core.PageResult{}, err
+				}
+				// Degrade: emit cached fields only.
+				return core.PageResult{Task: cl.Task, Record: rec}, nil
+			}
+			for _, f := range nulls {
+				if v, present := res.Record[f]; present {
+					rec[f] = v
+				}
+			}
+			if validRequired(res.Record, c.required) {
+				st.healer.Retain(selector.SynthSample{URL: finalURL, HTML: html, Sidecar: cl.Sidecar, Truth: res.Record})
+			}
+		}
+		if len(triggered) > 0 {
+			c.healField(ctx, st, domain, finalURL, html, md, cl.Sidecar, triggered)
+		}
+		st.cachedPages++
+		if st.cachedPages%25 == 0 {
+			c.flushNullRates(st, domain)
+		}
+		return core.PageResult{Task: cl.Task, Record: rec}, nil
+	}
+
+	// Cold domain: direct LLM (Purpose synth) + retain + synthesize at N.
+	res, err := c.extractOne(ctx, cl.Page.Markdown, cl.Sidecar, "synth", "")
+	if err != nil {
+		if errors.Is(err, ErrCostCeiling) {
+			return core.PageResult{}, err
+		}
+		return core.PageResult{Task: cl.Task, Err: err}, nil
+	}
+	if validRequired(res.Record, c.required) {
+		st.healer.Retain(selector.SynthSample{URL: finalURL, HTML: html, Sidecar: cl.Sidecar, Truth: res.Record})
+		if len(st.healer.Samples()) >= 3 {
+			doc, serr := selector.Synthesize(ctx, st.healer.Samples(), c.opts.Schema, c.opts.Propose, nil)
+			if serr == nil {
+				doc.Domain = domain
+				if raw, merr := json.Marshal(doc); merr == nil {
+					if perr := c.db.PutSelectors(domain, c.schemaHash, string(raw), doc.SamplesUsed); perr != nil {
+						fmt.Fprintf(os.Stderr, "warning: cache selectors: %v\n", perr)
+					} else {
+						st.doc = doc
+					}
+				}
+			}
+		}
+	}
+	return core.PageResult{Task: cl.Task, Record: res.Record}, nil
 }
 
 // scopeFilterExpansion keeps only in-scope sitemap-expanded URLs (the
@@ -620,10 +687,12 @@ func scopeFilterExpansion(scope Scope, seedURL string, expanded []string) []stri
 
 // healField re-synthesizes triggered fields only (full template when ≥50%
 // broken), merging into the live doc so healthy fields serve throughout.
-func healField(ctx context.Context, db *store.DB, st *domainState, opts Options, domain, schemaHash, pageURL, html, md string, sidecar json.RawMessage, triggered []string, extractOne func(context.Context, string, json.RawMessage, string, string) (extract.ExtractResult, error)) {
+// healField re-synthesizes triggered fields only (full template when ≥50%
+// broken), merging into the live doc so healthy fields serve throughout.
+func (c *crawlContext) healField(ctx context.Context, st *domainState, domain, pageURL, html, md string, sidecar json.RawMessage, triggered []string) {
 	// Fresh ground truth on the current (new-template) page.
-	if res, err := extractOne(ctx, md, sidecar, "synth", "heal sample: "+pageURL); err == nil {
-		if validRequired(res.Record, requiredFields(opts.Schema)) {
+	if res, err := c.extractOne(ctx, md, sidecar, "synth", "heal sample: "+pageURL); err == nil {
+		if validRequired(res.Record, requiredFields(c.opts.Schema)) {
 			st.healer.Retain(selector.SynthSample{URL: pageURL, HTML: html, Sidecar: sidecar, Truth: res.Record})
 		}
 	}
@@ -635,7 +704,7 @@ func healField(ctx context.Context, db *store.DB, st *domainState, opts Options,
 	if selector.FullResynth(len(st.doc.Fields), len(triggered)) {
 		only = nil // ≥50% broken → full redesign
 	}
-	doc, err := selector.Synthesize(ctx, samples, opts.Schema, opts.Propose, only)
+	doc, err := selector.Synthesize(ctx, samples, c.opts.Schema, c.opts.Propose, only)
 	if err != nil {
 		return
 	}
@@ -653,7 +722,7 @@ func healField(ctx context.Context, db *store.DB, st *domainState, opts Options,
 		}
 	}
 	if raw, err := json.Marshal(st.doc); err == nil {
-		if perr := db.PutSelectors(domain, schemaHash, string(raw), len(samples)); perr != nil {
+		if perr := c.db.PutSelectors(domain, c.schemaHash, string(raw), len(samples)); perr != nil {
 			fmt.Fprintf(os.Stderr, "warning: cache selectors: %v\n", perr)
 		}
 	}
@@ -662,13 +731,13 @@ func healField(ctx context.Context, db *store.DB, st *domainState, opts Options,
 // flushNullRates persists current null rates into fields_json.
 // ponytail: a crash loses ≤25 pages of stats (ceiling = slightly stale
 // trigger after --resume — self-corrects within 25 pages).
-func flushNullRates(db *store.DB, st *domainState, domain, schemaHash string) {
+func (c *crawlContext) flushNullRates(st *domainState, domain string) {
 	for f, sel := range st.doc.Fields {
 		sel.NullRate = st.healer.NullRate(f)
 		st.doc.Fields[f] = sel
 	}
 	if raw, err := json.Marshal(st.doc); err == nil {
-		if perr := db.PutSelectors(domain, schemaHash, string(raw), st.doc.SamplesUsed); perr != nil {
+		if perr := c.db.PutSelectors(domain, c.schemaHash, string(raw), st.doc.SamplesUsed); perr != nil {
 			fmt.Fprintf(os.Stderr, "warning: cache selectors: %v\n", perr)
 		}
 	}
