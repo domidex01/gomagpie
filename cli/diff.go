@@ -69,7 +69,7 @@ func runDiff(ctx context.Context, rawURL string, o diffOptions) error {
 		APIKeyFor: cfg.APIKey,
 	}, rawURL, scrape.Options{})
 	if err != nil {
-		return scrapeExit(err, rawURL, "")
+		return keyHint(err)
 	}
 	diff, err := scrape.DiffWords(string(snap), res.Markdown)
 	if err != nil {

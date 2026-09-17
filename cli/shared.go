@@ -9,14 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"gomagpie/clean"
 	"gomagpie/config"
 	"gomagpie/crawl"
 	"gomagpie/extract"
-	"gomagpie/fetch"
 	"gomagpie/scrape"
 	"gomagpie/store"
-	"gomagpie/vertical"
 )
 
 // ProviderHelp is the single home for the --provider value list, shared by
@@ -105,15 +102,9 @@ func closeDB(db *store.DB) {
 	_ = db.Close() //nolint:errcheck // end of command; close error unactionable
 }
 
-// checkBrowser rejects unknown TLS fingerprints pre-I/O (exit 2). One
-// home so scrape, crawl, batch can't drift; scrape.Run re-validates for
-// the MCP path, which never touches the CLI.
-func checkBrowser(cmd, name string) error {
-	if !fetch.ValidBrowser(name) {
-		return fail(2, "%s: browser %q must be chrome|firefox|random", cmd, name)
-	}
-	return nil
-}
+// setKeyHint is the single home for the API-key setup hint, shared by
+// the pre-flight checks and the pipeline error path.
+const setKeyHint = "set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`"
 
 // scrapeDeps builds the pipeline Deps over db with the CLI extractor
 // wiring. Shared so batch's goroutine fan-out uses the exact same
@@ -128,22 +119,20 @@ func scrapeDeps(db *store.DB, cfg config.Config) scrape.Deps {
 	}
 }
 
-// scrapeExit maps shared pipeline errors to exit codes, mirroring the
-// runScrape switch: missing key → 7, cost ceiling → 6, quality → 8,
-// vertical mismatch → 2, non-public address → 2. One home so new
-// commands cannot drift.
-func scrapeExit(err error, rawURL, provider string) error {
-	switch {
-	case errors.Is(err, scrape.ErrMissingKey):
-		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
-	case errors.Is(err, crawl.ErrCostCeiling):
-		return fail(6, "cost ceiling exceeded: %v", err)
-	case errors.Is(err, clean.ErrQuality):
-		return fail(8, "%s", qualityMessage(err, rawURL))
-	case errors.Is(err, vertical.ErrURLMismatch):
-		return fail(2, "%s", err.Error())
-	case errors.Is(err, fetch.ErrPrivateAddress):
-		return fail(2, "%s", err.Error())
+// missingKeyErr builds the pre-flight missing-key failure. It wraps
+// scrape.ErrMissingKey so exitFor decides the code (7) — the message
+// matches the historical text exactly.
+func missingKeyErr(provider string) error {
+	return fmt.Errorf("%w for %s: %s", scrape.ErrMissingKey, provider, setKeyHint)
+}
+
+// keyHint attaches the set-key hint to a missing-key error from the
+// pipeline (which already names the provider), preserving the chain so
+// exitFor still maps it to 7. All other errors pass through unchanged —
+// their messages self-describe (quality, cost ceiling, robots, SSRF).
+func keyHint(err error) error {
+	if errors.Is(err, scrape.ErrMissingKey) {
+		return fmt.Errorf("%w: %s", err, setKeyHint)
 	}
 	return err
 }
@@ -188,7 +177,7 @@ func checkCostCeiling(db *store.DB, runID, provider, model, promptText string, m
 		}
 	}
 	if running+proj > maxCost {
-		return fail(6, "cost ceiling exceeded: running %.6f + projected %.6f > max %.6f", running, proj, maxCost)
+		return fmt.Errorf("cost ceiling exceeded: running %.6f + projected %.6f > max %.6f: %w", running, proj, maxCost, crawl.ErrCostCeiling)
 	}
 	return nil
 }

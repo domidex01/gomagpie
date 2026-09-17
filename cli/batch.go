@@ -88,7 +88,7 @@ func runBatch(ctx context.Context, urls []string, o batchOptions) error {
 	if format != "jsonl" && format != "json" {
 		return fail(2, "batch: --format %q must be jsonl|json", o.Format)
 	}
-	if err := checkBrowser("batch", o.Browser); err != nil {
+	if err := scrape.ValidateOptions(scrape.Options{Browser: o.Browser}); err != nil {
 		return err
 	}
 

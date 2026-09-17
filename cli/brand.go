@@ -48,7 +48,7 @@ func runBrand(ctx context.Context, rawURL string, o brandOptions) error {
 		APIKeyFor: cfg.APIKey,
 	}, rawURL)
 	if err != nil {
-		return scrapeExit(err, rawURL, "")
+		return keyHint(err)
 	}
 	doc, merr := marshalOut(map[string]any{
 		"url": res.URL, "final_url": res.FinalURL, "title": res.Title,

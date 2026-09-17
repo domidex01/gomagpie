@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"gomagpie/config"
-	"gomagpie/fetch"
 
 	"github.com/spf13/cobra"
 )
@@ -793,14 +792,6 @@ func closedPortCLI(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return addr
-}
-
-func TestScrapeExit_PrivateAddress(t *testing.T) {
-	// Unit: the sentinel maps to exit 2 at the CLI edge.
-	err := scrapeExit(fmt.Errorf("scrape: fetch: %w", fetch.ErrPrivateAddress), "http://x/", "openai")
-	if codeOf(err) != 2 {
-		t.Fatalf("exit = %d, want 2 (err=%v)", codeOf(err), err)
-	}
 }
 
 func TestScrape_PrivateExit2(t *testing.T) {

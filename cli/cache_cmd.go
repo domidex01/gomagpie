@@ -159,7 +159,7 @@ func runCacheHeal(cmd *cobra.Command, _ []string) error {
 	}
 	key := cfg.APIKey(provider)
 	if key == "" && needsAPIKey(provider) {
-		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
+		return missingKeyErr(provider)
 	}
 	db, err := store.Open(cfg.CacheDB)
 	if err != nil {
