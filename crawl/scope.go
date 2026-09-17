@@ -141,6 +141,8 @@ func (s Scope) Allows(base, cand *url.URL) bool {
 
 // skipExtensions is the binary-asset skip table applied in ExtractLinks
 // before enqueue: assets are never pages, fetching them burns --max-pages.
+// "pdf" stays a deliberate non-goal: `magpie scrape <pdf-url>` extracts
+// text (clean/pdf.go), but crawling does not follow PDF links (Phase E).
 var skipExtensions = map[string]bool{
 	"pdf": true, "png": true, "jpg": true, "jpeg": true, "gif": true,
 	"webp": true, "svg": true, "ico": true, "avif": true,

@@ -48,6 +48,7 @@ type Options struct {
 	PageFormat string // markdown|llm|text|json ("" = markdown)
 	Scope      clean.Scope
 	Profile    string
+	Browser    string // TLS fingerprint: chrome|firefox|random ("" = stock)
 	Cookies    string
 	// Vertical selects a zero-LLM typed extractor: "" (default) = off,
 	// "auto" = strict auto-dispatch, or an extractor name for explicit
@@ -93,6 +94,10 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	default:
 		return Result{}, fmt.Errorf("scrape: page format %q must be markdown|llm|text|json", o.PageFormat)
 	}
+	// Same for the browser fingerprint: reject before any socket opens.
+	if !fetch.ValidBrowser(o.Browser) {
+		return Result{}, fmt.Errorf("scrape: browser %q must be chrome|firefox|random", o.Browser)
+	}
 	// Unknown vertical names fail before any I/O, like a bogus page format.
 	// The resolved extractor rides along for the dispatch below — one Lookup.
 	var explicit *vertical.Extractor
@@ -124,7 +129,7 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		vf = static
 	}
 	fetchStart := time.Now()
-	page, err := fetchURL(ctx, vf, rawURL, render, o.Profile, o.Cookies)
+	page, err := fetchURL(ctx, vf, rawURL, render, o.Profile, o.Cookies, o.Browser)
 	if err != nil {
 		finish(0, 1, "error")
 		return Result{}, err
@@ -138,6 +143,7 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	cleaned, err := clean.Clean(ctx, clean.RawPage{
 		HTML: page.HTML, URL: page.URL, FinalURL: page.FinalURL,
 		Scope: o.Scope, StatusCode: page.StatusCode,
+		ContentType: page.Headers.Get("Content-Type"),
 	})
 	if err != nil {
 		finish(0, 1, "error")
@@ -247,13 +253,13 @@ func runVertical(ctx context.Context, vf vertical.Fetcher, rawURL string, ex ver
 	return base, nil
 }
 
-func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render, profile, cookies string) (*fetch.FetchResponse, error) {
+func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render, profile, cookies, browser string) (*fetch.FetchResponse, error) {
 	if render == "browser" {
 		return fetchBrowser(ctx, rawURL)
 	}
 	// A4 pass-through: every status reaches Clean+Classify so blocked pages
 	// get typed quality errors instead of "fetch: HTTP %d".
-	resp, err := vf.Fetch(ctx, fetch.FetchRequest{URL: rawURL, Profile: profile, Cookies: cookies})
+	resp, err := vf.Fetch(ctx, fetch.FetchRequest{URL: rawURL, Profile: profile, Cookies: cookies, Browser: browser})
 	if err != nil {
 		return nil, err
 	}

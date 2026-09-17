@@ -11,6 +11,7 @@ import (
 
 	"gomagpie/clean"
 	"gomagpie/extract"
+	"gomagpie/fetch"
 	"gomagpie/scrape"
 	"gomagpie/store"
 
@@ -18,7 +19,7 @@ import (
 )
 
 func newBatchCmd() *cobra.Command {
-	var file, format, render, profile, cookies string
+	var file, format, render, profile, cookies, browser string
 	var concurrency int
 	var include, exclude []string
 	var onlyMainContent bool
@@ -30,7 +31,7 @@ URL yields {"ok":false,"error":...} — never a whole-batch failure. Zero LLM.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBatch(cmd.Context(), args, batchOptions{
 				File: file, Format: format, Concurrency: concurrency,
-				Render: render, Profile: profile, Cookies: cookies,
+				Render: render, Profile: profile, Cookies: cookies, Browser: browser,
 				Include: include, Exclude: exclude, OnlyMainContent: onlyMainContent,
 			})
 		},
@@ -41,6 +42,7 @@ URL yields {"ok":false,"error":...} — never a whole-batch failure. Zero LLM.`,
 	cmd.Flags().StringVar(&render, "render", "", "auto|static|browser")
 	cmd.Flags().StringVar(&profile, "profile", "", "request header bundle: default|chrome|firefox")
 	cmd.Flags().StringVar(&cookies, "cookies", "", "raw Cookie header value")
+	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: chrome|firefox|random")
 	cmd.Flags().StringSliceVar(&include, "include", nil, "comma-separated CSS selectors: scrape only matching subtrees")
 	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "comma-separated CSS selectors: drop matching nodes")
 	cmd.Flags().BoolVar(&onlyMainContent, "only-main-content", false, "main-content only")
@@ -53,6 +55,7 @@ type batchOptions struct {
 	Concurrency     int
 	Render          string
 	Profile         string
+	Browser         string
 	Cookies         string
 	Include         []string
 	Exclude         []string
@@ -88,6 +91,9 @@ func runBatch(ctx context.Context, urls []string, o batchOptions) error {
 	if format != "jsonl" && format != "json" {
 		return fail(2, "batch: --format %q must be jsonl|json", o.Format)
 	}
+	if !fetch.ValidBrowser(o.Browser) {
+		return fail(2, "batch: browser %q must be chrome|firefox|random", o.Browser)
+	}
 
 	db, err := store.Open(cfg.CacheDB)
 	if err != nil {
@@ -102,7 +108,8 @@ func runBatch(ctx context.Context, urls []string, o batchOptions) error {
 		},
 		APIKeyFor: cfg.APIKey,
 	}, urls, scrape.BatchOptions{
-		Concurrency: o.Concurrency, Render: o.Render, Profile: o.Profile, Cookies: o.Cookies,
+		Concurrency: o.Concurrency, Render: o.Render, Profile: o.Profile,
+		Browser: o.Browser, Cookies: o.Cookies,
 		Scope: clean.Scope{Include: o.Include, Exclude: o.Exclude, OnlyMainContent: o.OnlyMainContent},
 	})
 	if err != nil {

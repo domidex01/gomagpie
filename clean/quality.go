@@ -89,13 +89,23 @@ func QualityIssue(err error) Issue {
 // precedence is visible in one list. Challenge/deny markers only count on
 // thin content (<200 scored words) — a rich article mentioning
 // "Just a moment" stays IssueNone.
-func Classify(p CleanedPage, statusCode int, body []byte) Issue {
+// isPDF comes from Clean's pre-scope branch (never re-tested here — body
+// is scoped HTML, so a byte test would be fragile): PDF bodies are
+// binary, so both body-bytes rules are disabled and the pdf-empty rule
+// owns the empty case.
+func Classify(p CleanedPage, statusCode int, body []byte, isPDF bool) Issue {
+	if isPDF {
+		// Binary noise must not feed bodyIsRicher or the marker rules —
+		// nil the body before lower is computed, not after.
+		body = nil
+	}
 	q := qualityCtx{
 		status: statusCode,
 		words:  WordCount(p.Markdown),
 		md:     p.Markdown,
 		title:  p.Title,
 		body:   body,
+		isPDF:  isPDF,
 		lower:  strings.ToLower(string(body) + "\n" + p.Markdown + "\n" + p.Title),
 	}
 	q.thin = q.words < ThinPageWords
@@ -114,6 +124,7 @@ type qualityCtx struct {
 	md     string
 	title  string
 	body   []byte
+	isPDF  bool
 	lower  string // lower(body + markdown + title), computed once
 }
 
@@ -148,6 +159,12 @@ var qualityRules = []qualityRule{
 	{"unavailable-status", func(q qualityCtx) (Issue, bool) {
 		if q.status == 429 || q.status == 503 || (q.status >= 500 && q.status <= 599) {
 			return IssueUnavailable, true
+		}
+		return IssueNone, false
+	}},
+	{"pdf-empty", func(q qualityCtx) (Issue, bool) {
+		if q.isPDF && q.words == 0 {
+			return IssueEmpty, true // text-less/scan PDF — loud, never empty success
 		}
 		return IssueNone, false
 	}},

@@ -7,6 +7,7 @@ import (
 	"gomagpie/clean"
 	"gomagpie/config"
 	"gomagpie/extract"
+	"gomagpie/fetch"
 	"gomagpie/scrape"
 	"gomagpie/store"
 	"gomagpie/vertical"
@@ -17,7 +18,7 @@ import (
 func newScrapeCmd() *cobra.Command {
 	var schema, render, provider, model, out, format string
 	var noCache bool
-	var pageFormat, headerProfile, cookies string
+	var pageFormat, headerProfile, cookies, browser string
 	var include, exclude []string
 	var onlyMainContent bool
 	var verticalName string
@@ -31,7 +32,7 @@ func newScrapeCmd() *cobra.Command {
 				Out: out, Format: format, NoCache: noCache,
 				PageFormat: pageFormat, Include: include, Exclude: exclude,
 				OnlyMainContent: onlyMainContent, HeaderProfile: headerProfile, Cookies: cookies,
-				Vertical: verticalName,
+				Browser: browser, Vertical: verticalName,
 			})
 		},
 	}
@@ -48,6 +49,7 @@ func newScrapeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&onlyMainContent, "only-main-content", false, "main-content only (trafilatura already does this)")
 	cmd.Flags().StringVar(&headerProfile, "header-profile", "", "request header bundle: default|chrome|firefox")
 	cmd.Flags().StringVar(&cookies, "cookies", "", "raw Cookie header value, e.g. \"a=b; c=d\"")
+	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: chrome|firefox|random")
 	cmd.Flags().StringVar(&verticalName, "vertical", "", "zero-LLM typed extractor: auto or a name (default off; `magpie vertical --list` in Phase C)")
 	return cmd
 }
@@ -68,6 +70,7 @@ type scrapeOptions struct {
 	OnlyMainContent bool
 	HeaderProfile   string
 	Cookies         string
+	Browser         string
 	// Vertical is flag-only (auto|name, default off): validated pre-I/O.
 	Vertical string
 }
@@ -102,6 +105,11 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		default:
 			return fail(2, "page-format %q must be markdown|llm|text|json", o.PageFormat)
 		}
+	}
+	// CLI-side check so an unknown --browser exits 2, not scrapeExit's
+	// default arm (exit 1). Run's own validation is the MCP-side gate.
+	if !fetch.ValidBrowser(o.Browser) {
+		return fail(2, "browser %q must be chrome|firefox|random", o.Browser)
 	}
 	// Unknown vertical names fail pre-I/O: no fetch, no DB touched beyond open.
 	if o.Vertical != "" && o.Vertical != "auto" {
@@ -144,7 +152,7 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		MaxCost: cfg.MaxCost, UseCache: !cfg.NoCache,
 		PageFormat: o.PageFormat,
 		Scope:      clean.Scope{Include: o.Include, Exclude: o.Exclude, OnlyMainContent: o.OnlyMainContent},
-		Profile:    o.HeaderProfile, Cookies: o.Cookies,
+		Profile:    o.HeaderProfile, Cookies: o.Cookies, Browser: o.Browser,
 		Vertical: o.Vertical,
 	})
 	if err != nil {

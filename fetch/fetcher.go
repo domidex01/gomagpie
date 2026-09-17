@@ -11,6 +11,7 @@ type FetchRequest struct {
 	URL     string
 	Timeout time.Duration // per-attempt budget; 0 = 20s default
 	Profile string        // header profile: default|chrome|firefox (unknown = default)
+	Browser string        // TLS fingerprint: chrome|firefox|random ("" = stock TLS)
 	Cookies string        // raw Cookie header value, passed through verbatim
 }
 

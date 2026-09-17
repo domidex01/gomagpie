@@ -36,6 +36,7 @@ type ScrapeIn struct {
 	Exclude         StringList `json:"exclude,omitempty" jsonschema:"CSS selectors: drop matching nodes"`
 	OnlyMainContent *FlexBool  `json:"only_main_content,omitempty" jsonschema:"main-content only"`
 	Profile         string     `json:"profile,omitempty" jsonschema:"header profile: default, chrome, or firefox"`
+	Browser         string     `json:"browser,omitempty" jsonschema:"TLS-impersonating browser fingerprint: chrome, firefox, or random"`
 	Cookies         string     `json:"cookies,omitempty" jsonschema:"raw Cookie header value"`
 }
 
@@ -77,7 +78,7 @@ func handleScrape(d Deps) func(context.Context, *sdk.CallToolRequest, ScrapeIn) 
 			Model: d.DefaultModel, MaxCost: d.MaxCost, UseCache: useCache,
 			PageFormat: in.PageFormat,
 			Scope:      clean.Scope{Include: []string(in.Include), Exclude: []string(in.Exclude), OnlyMainContent: onlyMain},
-			Profile:    in.Profile, Cookies: in.Cookies,
+			Profile:    in.Profile, Cookies: in.Cookies, Browser: in.Browser,
 		})
 		if err != nil {
 			return nil, ScrapeOut{}, fmt.Errorf("mcp: scrape_url: %w", err)
@@ -117,6 +118,7 @@ type CrawlIn struct {
 	Exclude         StringList `json:"exclude,omitempty" jsonschema:"URL globs to exclude (wins over include)"`
 	AllowSubdomains *FlexBool  `json:"allow_subdomains,omitempty" jsonschema:"follow links into subdomains of the seed host"`
 	NoSitemap       *FlexBool  `json:"no_sitemap,omitempty" jsonschema:"skip sitemap seed expansion"`
+	Browser         string     `json:"browser,omitempty" jsonschema:"TLS-impersonating browser fingerprint: chrome, firefox, or random"`
 	Schema          FlexMap    `json:"schema,omitempty" jsonschema:"JSON Schema object for extraction"`
 	RunID           string     `json:"run_id,omitempty" jsonschema:"poll a previous run instead of crawling"`
 }
@@ -192,6 +194,7 @@ func handleCrawl(d Deps) func(context.Context, *sdk.CallToolRequest, CrawlIn) (*
 			Include: []string(in.Include), Exclude: []string(in.Exclude),
 			AllowSubdomains: allowSubdomains, NoSitemap: noSitemap,
 			Format: "jsonl", Out: os.DevNull, RunID: runID,
+			Browser:  in.Browser,
 			Provider: d.DefaultProvider, Model: d.DefaultModel, MaxCost: d.MaxCost,
 			DB: d.DB, Extractor: ex, Progress: progress,
 		})

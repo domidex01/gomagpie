@@ -4,7 +4,9 @@ go 1.26.5
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
+	github.com/North-web-dev/impersonate-http v0.4.0
 	github.com/PuerkitoBio/goquery v1.13.0
+	github.com/andybalholm/brotli v1.2.4
 	github.com/andybalholm/cascadia v1.3.5
 	github.com/bits-and-blooms/bloom/v3 v3.7.1
 	github.com/cenkalti/backoff/v5 v5.0.3
@@ -12,6 +14,8 @@ require (
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c
 	github.com/google/jsonschema-go v0.4.3
 	github.com/jimsmart/grobotstxt v1.0.3
+	github.com/klauspost/compress v1.20.0
+	github.com/ledongthuc/pdf v0.0.0-20260907135840-6c8c28e0e8a0
 	github.com/markusmobius/go-trafilatura/v2 v2.2.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
@@ -47,6 +51,7 @@ require (
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/zerolog v1.35.1 // indirect
@@ -62,6 +67,7 @@ require (
 	github.com/ysmood/got v0.40.0 // indirect
 	github.com/ysmood/gson v0.7.3 // indirect
 	github.com/ysmood/leakless v0.9.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect

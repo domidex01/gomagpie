@@ -12,6 +12,11 @@ import (
 // Returns (score, hasEmbeddedData). Embedded __NEXT_DATA__/__NUXT__ JSON means
 // the caller harvests inline and skips the browser entirely.
 func ScoreJSRequired(page []byte, headers http.Header) (score int, hasEmbeddedData bool) {
+	// PDF bytes are final content, not an SPA shell: never escalate to rod
+	// (covers scrape and crawl callers). Clean extracts them page-by-page.
+	if bytes.HasPrefix(page, []byte("%PDF-")) {
+		return 0, false
+	}
 	s := string(page)
 	lower := strings.ToLower(s)
 
