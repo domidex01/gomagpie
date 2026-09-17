@@ -498,3 +498,24 @@ func TestSitemap_ContentEncodingGzip(t *testing.T) {
 		t.Errorf("urls = %v, want 2 (content-encoding decode path)", urls)
 	}
 }
+
+func TestSitemap_DuplicateChildNotTruncated(t *testing.T) {
+	// Two indexes listing the same child is ordinary sitemap hygiene —
+	// the visited-set skip must not flag truncation for complete results.
+	f := &fakeSitemapFetcher{bodies: map[string]fakeSitemapResp{
+		"example.com/robots.txt": {body: []byte("Sitemap: https://example.com/idx.xml\n")},
+		"example.com/idx.xml": {body: []byte(indexListing(
+			"https://example.com/u.xml", "https://example.com/u.xml"))},
+		"example.com/u.xml": {body: []byte(urlsetOf("https://example.com/a"))},
+	}}
+	urls, truncated, err := ListSitemapURLs(context.Background(), f, "https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Error("truncated = true, want false (results are complete; dup-skip is not truncation)")
+	}
+	if len(urls) != 1 {
+		t.Errorf("urls = %v, want 1", urls)
+	}
+}

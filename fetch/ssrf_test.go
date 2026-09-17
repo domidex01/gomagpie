@@ -127,7 +127,7 @@ func TestValidateURL_Table(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := fetch.ValidateURL(tc.url, lk.lookup, tc.opts)
+			err := fetch.ValidateURL(t.Context(), tc.url, lk.lookup, tc.opts)
 			if tc.wantErr && err == nil {
 				t.Fatalf("ValidateURL(%q) = nil, want SSRF rejection", tc.url)
 			}

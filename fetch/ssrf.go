@@ -44,9 +44,10 @@ func ssrfErr(format string, args ...any) error {
 // scheme (http/https, file only when allowed), hostname blocklist,
 // IP-literal predicate, and — for names — every resolved IP must pass the
 // same public predicate. DNS rebinds are caught here AND again post-dial
-// (peer check in guardedTransport). lookup nil = default resolver.
+// (peer check in guardedTransport). lookup nil = default resolver, run
+// with ctx (network I/O must honor the caller's deadline).
 // Every rejection wraps ErrPrivateAddress.
-func ValidateURL(raw string, lookup LookupFunc, o SSRFOptions) error {
+func ValidateURL(ctx context.Context, raw string, lookup LookupFunc, o SSRFOptions) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return ssrfErr("fetch: bad url %q (%v)", raw, err)
@@ -82,7 +83,7 @@ func ValidateURL(raw string, lookup LookupFunc, o SSRFOptions) error {
 			return net.DefaultResolver.LookupIP(ctx, "ip", host)
 		}
 	}
-	addrs, err := lookup(context.Background(), host)
+	addrs, err := lookup(ctx, host)
 	if err != nil {
 		// Fail closed: unresolvable ≠ public.
 		return ssrfErr("fetch: resolve %q: %v", host, err)
@@ -165,7 +166,7 @@ func NewStaticFetcherWithOptions(o SSRFOptions) (*StaticFetcher, error) {
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
 			}
-			if err := ValidateURL(req.URL.String(), nil, o); err != nil {
+			if err := ValidateURL(req.Context(), req.URL.String(), nil, o); err != nil {
 				return fmt.Errorf("fetch: redirect to %s: %w", req.URL.Host, err)
 			}
 			return nil

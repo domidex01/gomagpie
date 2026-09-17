@@ -48,7 +48,13 @@ func guardedTransport(o SSRFOptions) *http.Transport {
 			if err != nil {
 				return nil, err
 			}
-			if !peerAllowed(conn.RemoteAddr(), o) {
+			// GOMAGPIE_PROXY set → this peer is the operator-configured
+			// proxy (trusted egress, often localhost/internal), not the
+			// SSRF target: the policy applies to target URLs via
+			// ValidateURL + CheckRedirect, and NO_PROXY-exempt hosts are
+			// equally operator-chosen (curl semantics).
+			proxied := os.Getenv("GOMAGPIE_PROXY") != ""
+			if !dialPeerAllowed(conn.RemoteAddr(), o, proxied) {
 				_ = conn.Close() //nolint:errcheck // rejection path; close error unactionable
 				return nil, ssrfErr("fetch: dial peer %s is not a public address (DNS rebind?)", conn.RemoteAddr())
 			}
@@ -66,27 +72,28 @@ func guardedTransport(o SSRFOptions) *http.Transport {
 	return transport
 }
 
-// peerAllowed re-checks the CONNECTED peer address, closing the TOCTOU
+// dialPeerAllowed re-checks the CONNECTED peer address, closing the TOCTOU
 // window between ValidateURL's DNS answer and the actual socket: no HTTP
-// byte is written before this passes.
-func peerAllowed(addr net.Addr, o SSRFOptions) bool {
-	if o.AllowPrivate {
+// byte is written before this passes. Proxied connections skip the check —
+// their peer is the trusted proxy, and the proxy (not us) resolves the
+// target, so a post-connect check tells us nothing about the target anyway.
+func dialPeerAllowed(addr net.Addr, o SSRFOptions, proxied bool) bool {
+	if proxied || o.AllowPrivate {
 		return true
 	}
 	ip, ok := addrIP(addr)
 	return ok && isPublicIP(ip)
 }
 
+// addrIP extracts the IP from a dial peer. http.Transport only dials tcp,
+// so anything else fails closed.
 func addrIP(addr net.Addr) (netip.Addr, bool) {
-	if ta, ok := addr.(*net.TCPAddr); ok {
-		a, ok := netip.AddrFromSlice(ta.IP)
-		return a, ok
-	}
-	ap, err := netip.ParseAddrPort(addr.String())
-	if err != nil {
+	ta, ok := addr.(*net.TCPAddr)
+	if !ok {
 		return netip.Addr{}, false
 	}
-	return ap.Addr(), true
+	a, ok := netip.AddrFromSlice(ta.IP)
+	return a, ok
 }
 
 // proxyFunc resolves the proxy per request: GOMAGPIE_PROXY (http(s) URL,
@@ -172,7 +179,7 @@ func (s *StaticFetcher) do(ctx context.Context, req FetchRequest) (*FetchRespons
 	// fetcher test proves the origin's hit counter stays 0). go-rod
 	// escalation only runs on content already fetched through this client,
 	// so a blocked URL never reaches the browser.
-	if err := ValidateURL(req.URL, nil, s.ssrf); err != nil {
+	if err := ValidateURL(ctx, req.URL, nil, s.ssrf); err != nil {
 		return nil, err
 	}
 	timeout := budget(req)

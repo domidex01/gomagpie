@@ -131,6 +131,15 @@ type CrawlOut struct {
 	Usage        map[string]any `json:"usage,omitempty" jsonschema:"accumulated LLM usage"`
 }
 
+// flexBool dereferences an optional bool input with a default
+// (same_host nil→true; the scope bools nil→false).
+func flexBool(b *FlexBool, def bool) bool {
+	if b == nil {
+		return def
+	}
+	return bool(*b)
+}
+
 func handleCrawl(d Deps) func(context.Context, *sdk.CallToolRequest, CrawlIn) (*sdk.CallToolResult, CrawlOut, error) {
 	return func(ctx context.Context, req *sdk.CallToolRequest, in CrawlIn) (*sdk.CallToolResult, CrawlOut, error) {
 		// Status-only path: stored status, zero extractor involvement.
@@ -153,17 +162,8 @@ func handleCrawl(d Deps) func(context.Context, *sdk.CallToolRequest, CrawlIn) (*
 		if err != nil {
 			return nil, CrawlOut{}, err
 		}
-		sameHost := true
-		if in.SameHost != nil {
-			sameHost = bool(*in.SameHost)
-		}
-		allowSubdomains, noSitemap := false, false
-		if in.AllowSubdomains != nil {
-			allowSubdomains = bool(*in.AllowSubdomains)
-		}
-		if in.NoSitemap != nil {
-			noSitemap = bool(*in.NoSitemap)
-		}
+		sameHost := flexBool(in.SameHost, true)
+		allowSubdomains, noSitemap := flexBool(in.AllowSubdomains, false), flexBool(in.NoSitemap, false)
 		key := ""
 		if d.ScrapeDeps.APIKeyFor != nil {
 			key = d.ScrapeDeps.APIKeyFor(d.DefaultProvider)

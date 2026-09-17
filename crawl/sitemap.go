@@ -96,7 +96,10 @@ func ListSitemapURLs(ctx context.Context, f vertical.Fetcher, siteURL string) ([
 		}
 		cur := queue[0]
 		queue = queue[1:]
-		if visited[cur.url] || cur.depth > maxSitemapDepth {
+		if visited[cur.url] {
+			continue // listed from another index too: results unaffected
+		}
+		if cur.depth > maxSitemapDepth {
 			truncated = true
 			continue
 		}

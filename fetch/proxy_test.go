@@ -5,6 +5,7 @@ package fetch_test
 // via t.Setenv (parallel-safe, auto-restore).
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -124,5 +125,36 @@ func TestProxy_RobotsViaProxy(t *testing.T) {
 	}
 	if n := proxyHits.Load(); n < 1 {
 		t.Errorf("proxy hits = %d, want ≥1 (robots fetch must ride the proxy)", n)
+	}
+}
+
+// TestProxy_DialGuardSkipsProxyPeer is the regression test for the
+// proxyconnect bug: with GOMAGPIE_PROXY set, the dial peer IS the
+// operator-configured proxy (trusted egress, often localhost) — the
+// guard must reject TARGETS (ValidateURL pre-dial), never the proxy
+// itself. Strict options throughout: no test-binary relaxation involved.
+// The flip side (public target + local proxy succeeds) is only provable
+// against a routable origin — covered by manual smoke, noted here.
+func TestProxy_DialGuardSkipsProxyPeer(t *testing.T) {
+	var proxyHits, originHits atomic.Int64
+	origin := hitOrigin(t, &originHits, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("never")) //nolint:errcheck // test server
+	})
+	proxyURL := newProxyOrigin(t, &proxyHits, origin.URL)
+	t.Setenv("GOMAGPIE_PROXY", proxyURL)
+
+	f, err := fetch.NewStaticFetcherWithOptions(fetch.SSRFOptions{}) // STRICT
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.Fetch(t.Context(), fetch.FetchRequest{URL: origin.URL})
+	if !errors.Is(err, fetch.ErrPrivateAddress) {
+		t.Fatalf("err = %v, want the target's SSRF rejection (policy holds behind a proxy)", err)
+	}
+	if strings.Contains(err.Error(), "proxyconnect") || strings.Contains(err.Error(), "dial peer") {
+		t.Errorf("err = %v: the dial guard fired on the proxy peer — operator proxies are trusted egress", err)
+	}
+	if n := originHits.Load(); n != 0 {
+		t.Errorf("origin hits = %d, want 0 (target still rejected pre-dial)", n)
 	}
 }
