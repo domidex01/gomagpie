@@ -155,18 +155,27 @@ func NewStaticFetcherWithOptions(o SSRFOptions) (*StaticFetcher, error) {
 		return nil, fmt.Errorf("fetch: cookiejar: %w", err)
 	}
 	client := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: guardedTransport(o),
-		Jar:       jar,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.New("stopped after 10 redirects")
-			}
-			if err := ValidateURL(req.Context(), req.URL.String(), nil, o); err != nil {
-				return fmt.Errorf("fetch: redirect to %s: %w", req.URL.Host, err)
-			}
-			return nil
-		},
+		Timeout:       30 * time.Second,
+		Transport:     guardedTransport(o),
+		Jar:           jar,
+		CheckRedirect: redirectGuard(o),
 	}
-	return &StaticFetcher{client: client, ua: defaultHeaders["User-Agent"], ssrf: o}, nil
+	// The jar is shared with Phase E's browser clients so challenge-warmup
+	// cookies carry over between the stock and impersonation paths.
+	return &StaticFetcher{client: client, jar: jar, ua: defaultHeaders["User-Agent"], ssrf: o}, nil
+}
+
+// redirectGuard validates every redirect hop against the SSRF policy.
+// Shared by the stock client and Phase E's browser (uTLS) client so a
+// redirect chain can never smuggle either transport onto a private host.
+func redirectGuard(o SSRFOptions) func(req *http.Request, via []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		if err := ValidateURL(req.Context(), req.URL.String(), nil, o); err != nil {
+			return fmt.Errorf("fetch: redirect to %s: %w", req.URL.Host, err)
+		}
+		return nil
+	}
 }

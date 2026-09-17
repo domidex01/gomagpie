@@ -54,7 +54,7 @@ func TestClassify_Table(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := clean.Classify(clean.CleanedPage{Markdown: c.md}, c.status, c.body)
+			got := clean.Classify(clean.CleanedPage{Markdown: c.md}, c.status, c.body, false)
 			if got != c.want {
 				t.Errorf("Classify() = %q, want %q", got, c.want)
 			}

@@ -19,6 +19,7 @@ type RawPage struct {
 	StructuredRaw json.RawMessage // pre-harvested sidecar (optional)
 	Scope         Scope           // A2 scoping pre-pass; empty = identity
 	StatusCode    int             // fetch status; 0/200 = same; non-2xx feeds Classify
+	ContentType   string          // fetch Content-Type header; PDFs branch on it too
 }
 
 // CleanedPage is the cleaning output.
@@ -43,6 +44,12 @@ const MaxTokens = 8000
 // Quality never fails here: Classify attaches Quality and enforcement
 // happens in scrape.Run / crawl.
 func Clean(ctx context.Context, raw RawPage) (CleanedPage, error) {
+	// PDFs never reach trafilatura/goquery: binary bodies would score as
+	// empty shells. Magic prefix OR Content-Type, decided BEFORE scoping —
+	// the branch flag (never a byte re-test) drives Classify's pdf guards.
+	if isPDF := isPDFBody(raw.HTML) || IsPDFContentType(raw.ContentType); isPDF {
+		return cleanPDF(raw)
+	}
 	htmlStr := string(raw.HTML)
 	if len(raw.Scope.Include)+len(raw.Scope.Exclude) > 0 {
 		htmlStr = ApplyScope(htmlStr, raw.Scope, func(string) {})
@@ -75,10 +82,32 @@ func Clean(ctx context.Context, raw RawPage) (CleanedPage, error) {
 	}
 	// Classify against the scoped document: scoping legitimately narrows
 	// content, so the pre-scope body must not count as "richer".
-	out.Quality = Classify(out, raw.StatusCode, []byte(htmlStr))
+	out.Quality = Classify(out, raw.StatusCode, []byte(htmlStr), false)
 	if out.Quality == IssueNone && fellBack && WordCount(md) < 50 {
 		out.Quality = IssueEmpty // trafilatura found no main content
 	}
+	return out, nil
+}
+
+// cleanPDF routes a PDF body through page extraction into a normal
+// CleanedPage (no sidecar, no metadata harvest — there is no HTML). A
+// read failure is a hard error; zero words becomes IssueEmpty via the
+// pdf-empty quality rule.
+func cleanPDF(raw RawPage) (CleanedPage, error) {
+	source := raw.FinalURL
+	if source == "" {
+		source = raw.URL
+	}
+	md, title, err := pdfToMarkdown(raw.HTML, source)
+	if err != nil {
+		return CleanedPage{}, err
+	}
+	out := CleanedPage{
+		Markdown: capTokens(md, MaxTokens),
+		Title:    title,
+		FinalURL: raw.FinalURL,
+	}
+	out.Quality = ClassifyPDF(out, raw.StatusCode)
 	return out, nil
 }
 

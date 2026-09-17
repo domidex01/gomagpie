@@ -13,7 +13,6 @@ import (
 	"gomagpie/extract"
 	"gomagpie/fetch"
 	pluginExec "gomagpie/plugin/exec"
-	"gomagpie/store"
 
 	"github.com/spf13/cobra"
 )
@@ -28,6 +27,7 @@ func newCrawlCmd() *cobra.Command {
 	var pathPrefix string
 	var include, exclude []string
 	var allowSubdomains, noSitemap bool
+	var browser string
 	cmd := &cobra.Command{
 		Use:   "crawl <url>",
 		Short: "BFS crawl + extract a site",
@@ -39,7 +39,7 @@ func newCrawlCmd() *cobra.Command {
 				SameHost: sameHost, Rate: rate, IgnoreRobots: ignoreRobots,
 				Provider: provider, Model: model, ExporterCmd: exporterCmd,
 				PathPrefix: pathPrefix, Include: include, Exclude: exclude,
-				AllowSubdomains: allowSubdomains, NoSitemap: noSitemap,
+				AllowSubdomains: allowSubdomains, NoSitemap: noSitemap, Browser: browser,
 			})
 		},
 	}
@@ -56,6 +56,7 @@ func newCrawlCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "comma-separated URL globs to exclude (wins over --include)")
 	cmd.Flags().BoolVar(&allowSubdomains, "allow-subdomains", false, "follow links into subdomains of the seed host")
 	cmd.Flags().BoolVar(&noSitemap, "no-sitemap", false, "skip sitemap seed expansion")
+	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: chrome|firefox|random")
 	cmd.Flags().Float64Var(&rate, "rate", 1, "per-host requests/sec")
 	cmd.Flags().BoolVar(&ignoreRobots, "ignore-robots", false, "fetch despite robots.txt (prints a warning)")
 	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp)
@@ -85,6 +86,7 @@ type crawlCLIOptions struct {
 	Exclude         []string
 	AllowSubdomains bool
 	NoSitemap       bool
+	Browser         string
 }
 
 func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
@@ -128,15 +130,19 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	if o.ExporterCmd != "" {
 		cfg.ExporterCmd = o.ExporterCmd
 	}
+	// Pre-I/O: an unknown fingerprint must exit 2, never burn a fetch.
+	if err := checkBrowser("crawl", o.Browser); err != nil {
+		return err
+	}
 	if o.IgnoreRobots {
 		fmt.Fprintln(os.Stderr, "WARNING: --ignore-robots set; fetching despite robots.txt")
 	}
 
-	db, err := store.Open(cfg.CacheDB)
+	db, err := openCmdDB(cfg)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }() //nolint:errcheck // end of command; close error unactionable
+	defer closeDB(db)
 
 	runID := o.Resume
 	resuming := runID != ""
@@ -211,6 +217,7 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		AllowSubdomains: o.AllowSubdomains, NoSitemap: o.NoSitemap,
 		Format: cfg.Format, Out: cfg.Out, RunID: runID,
 		Resume: resuming, ResumeID: o.Resume, IgnoreRobots: o.IgnoreRobots,
+		Browser:  o.Browser,
 		Provider: provider, Model: model, MaxCost: cfg.MaxCost,
 		DB: db, Extractor: ex, Propose: propose, OnRecord: onRecord,
 	})

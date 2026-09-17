@@ -46,15 +46,15 @@ Zen `/responses`-only models are unsupported (different API shape).
 
 | Command | Action |
 | :-- | :-- |
-| `magpie scrape <url> [--schema f] [--render auto\|static\|browser] [--provider …] [--model …] [--format json\|jsonl] [--max-cost usd] [--out f]` | Fetch → clean → extract one URL |
+| `magpie scrape <url> [--schema f] [--render auto\|static\|browser] [--browser chrome\|firefox\|random] [--provider …] [--model …] [--format json\|jsonl] [--max-cost usd] [--out f]` | Fetch → clean → extract one URL |
 | `magpie extract [--schema f \| --prompt t] [--content-type html\|markdown]` | Extract from stdin/file, no fetch (prompt = plain text, no schema) |
-| `magpie batch [urls...] [--file f] [--concurrency 8] [--format jsonl\|json]` | Scrape ≤100 URLs, one ok/error record each (markdown only) |
+| `magpie batch [urls...] [--file f] [--concurrency 8] [--format jsonl\|json] [--browser …]` | Scrape ≤100 URLs, one ok/error record each (markdown only) |
 | `magpie map <site> [--format lines\|json]` | List sitemap-derived page URLs (BFS to depth 5, gzip + entity aware; partial results on dead children or a 25s budget, flagged `truncated`) |
 | `magpie summarize <url> [--max-sentences 3] [--provider …]` | Summarize in ≤N sentences |
 | `magpie diff <url> --against <file>` | Word-level diff vs a markdown snapshot |
 | `magpie brand <url>` | Brand colors, fonts, logo, favicon (zero LLM) |
 | `magpie vertical [--list] [<url> --name]` | Zero-LLM typed extraction |
-| `magpie crawl <url> --schema f [--path-prefix /docs] [--include '**/docs/**'] [--exclude '**/api/**'] [--allow-subdomains] [--no-sitemap] [--exporter-cmd prog]` | BFS crawl + extract, scoped to matching links only; binary assets (pdf/images/video/fonts/archives) never enqueue; sitemap expansion is scope-filtered and best-effort; tee records as JSONL to prog's stdin |
+| `magpie crawl <url> --schema f [--path-prefix /docs] [--include '**/docs/**'] [--exclude '**/api/**'] [--allow-subdomains] [--no-sitemap] [--browser …] [--exporter-cmd prog]` | BFS crawl + extract, scoped to matching links only; binary assets (pdf/images/video/fonts/archives) never enqueue; sitemap expansion is scope-filtered and best-effort; tee records as JSONL to prog's stdin |
 | `magpie serve [--transport stdio\|http] [--addr :8080]` | Serve the pipeline over MCP |
 | `magpie build --with module@version --output f` | Compile a custom static binary with extra modules |
 | `magpie config set-key <provider> \| show` | Store key in OS keyring / show redacted config |
@@ -81,11 +81,40 @@ Every fetch (static, robots, crawl) goes through one guarded transport:
   `fetch_bytes`, and `fetch_ms` next to LLM tokens/cost; databases created
   before Phase D gain the columns automatically on open.
 
+## TLS impersonation & PDF
+
+**`--browser chrome|firefox|random`** (scrape, batch, crawl, MCP) swaps the
+stock TLS stack for a byte-exact browser fingerprint: Chrome/Firefox TLS
+ClientHello (JA3/JA4) *plus* matching HTTP/2 framing (SETTINGS,
+WINDOW_UPDATE, pseudo-header order) and header set. Sites that block the
+stock Go handshake pass. Notes:
+
+- `random` picks chrome or firefox once per process.
+- Headers come from the fingerprint profile, not `--header-profile` —
+  a stale UA next to a fresh hello is itself a fingerprint tell. Set
+  `--header-profile` explicitly to override; cleartext `http://` targets
+  always use our header profiles (the impersonation transport only speaks
+  TLS).
+- Every security property holds: pre-dial SSRF check, redirect
+  re-validation, peer-IP check, proxy policy (`GOMAGPIE_PROXY` tunnels
+  browser connections via CONNECT; `NO_PROXY` bypasses), 50 MB cap.
+- Credits: [`North-web-dev/impersonate-http`](https://github.com/North-web-dev/impersonate-http)
+  (MIT, wrapping `refraction-networking/utls`), verified against
+  tls.peet.ws; imported only inside `fetch/`.
+
+**PDF extraction:** `magpie scrape` on an `application/pdf` URL (or `%PDF-`
+magic) returns one `## Page N` markdown section per page, titled from the
+URL path stem, flowing through the same quality gate as HTML — a text-less
+scan PDF is a typed `empty` quality error (exit 8), an encrypted PDF is a
+loud error (never empty markdown). Crawl does not follow `.pdf` links.
+Credits: [`ledongthuc/pdf`](https://github.com/ledongthuc/pdf) (BSD-3,
+stdlib-only), imported only inside `clean/`.
+
 ## Checks
 
 ```bash
 go test ./...                                  # hermetic: no network, browser, or keys
-go test -tags browser ./fetch/ -run TestRodSmoke  # needs Chrome; skips otherwise
+go test -tags browser ./fetch/ -run 'TestRodSmoke|TestUTLS'  # needs Chrome + network; skips otherwise
 go test ./clean/ -update                       # regenerate markdown goldens
 golangci-lint run ./... && go vet ./... && test -z "$(gofmt -l .)"
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...  # + linux/amd64, darwin/arm64

@@ -121,6 +121,15 @@ func TestStaticFileURL(t *testing.T) {
 	}
 }
 
+// PDF bytes are final content, never an SPA shell: no rod escalation for
+// any caller (scrape and crawl).
+func TestDetectPDFNeverEscalates(t *testing.T) {
+	score, embedded := fetch.ScoreJSRequired([]byte("%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj"), nil)
+	if score != 0 || embedded {
+		t.Errorf("ScoreJSRequired(pdf) = (%d, %v), want (0, false)", score, embedded)
+	}
+}
+
 func TestDetect(t *testing.T) {
 	cases := []struct {
 		name     string

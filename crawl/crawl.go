@@ -44,6 +44,7 @@ type Options struct {
 	Provider     string
 	Model        string
 	MaxCost      float64
+	Browser      string // TLS fingerprint: chrome|firefox|random ("" = stock)
 	DB           *store.DB
 	// Scope bounds (compiled once in Run; bad globs fail pre-I/O).
 	PathPrefix      string
@@ -305,7 +306,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		var last *fetch.FetchResponse
 		fetchStart := time.Now()
 		resp, err := FetchWithRetry(ctx, func() (*fetch.FetchResponse, error) {
-			r, ferr := staticFetcher.Fetch(ctx, fetch.FetchRequest{URL: task.URL})
+			r, ferr := staticFetcher.Fetch(ctx, fetch.FetchRequest{URL: task.URL, Browser: opts.Browser})
 			// Reset on transport failure: qualityErr must classify the
 			// terminal outcome, never a stale response from an earlier try.
 			last = r
@@ -373,7 +374,10 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 				Page:    clean.CleanedPage{StructuredData: sidecar, FinalURL: finalURL},
 				Sidecar: sidecar}, nil
 		}
-		cleaned, err := clean.Clean(ctx, clean.RawPage{HTML: html, URL: page.Task.URL, FinalURL: finalURL})
+		cleaned, err := clean.Clean(ctx, clean.RawPage{
+			HTML: html, URL: page.Task.URL, FinalURL: finalURL,
+			StatusCode: page.Resp.StatusCode, ContentType: page.Resp.Headers.Get("Content-Type"),
+		})
 		if err != nil {
 			return core.Cleaned{Task: page.Task, Err: err}, nil
 		}
@@ -723,6 +727,7 @@ func qualityErr(ctx context.Context, task core.FetchTask, resp *fetch.FetchRespo
 	}
 	cleaned, cerr := clean.Clean(ctx, clean.RawPage{
 		HTML: resp.HTML, URL: task.URL, FinalURL: finalURL, StatusCode: resp.StatusCode,
+		ContentType: resp.Headers.Get("Content-Type"),
 	})
 	if cerr != nil || cleaned.Quality == clean.IssueNone {
 		return nil
