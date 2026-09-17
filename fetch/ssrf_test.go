@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,25 @@ import (
 
 	"gomagpie/fetch"
 )
+
+// TestSecurityFilesUseExplicitOptions bolts the test-binary hatch shut:
+// the SSRF/proxy test files must never use the bare constructor, which
+// rides the relaxed hatch and would pass vacuously. Non-security tests
+// (fetch_test, profiles_test) may keep the hatch — this guard covers
+// only the files where strictness is the thing under test.
+func TestSecurityFilesUseExplicitOptions(t *testing.T) {
+	for _, f := range []string{"ssrf_test.go", "proxy_test.go"} {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bareFetcherCtor.Match(src) {
+			t.Errorf("%s uses the bare constructor: use NewStaticFetcherWithOptions", f)
+		}
+	}
+}
+
+var bareFetcherCtor = regexp.MustCompile(`NewStaticFetcher\(\)`)
 
 // fakeLookup scripts host→IPs (the only new fake in Phase D); absent
 // hosts resolve to the NXDOMAIN shape (no addresses). Compile-locked to

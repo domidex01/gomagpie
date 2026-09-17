@@ -13,7 +13,6 @@ import (
 	"gomagpie/extract"
 	"gomagpie/fetch"
 	pluginExec "gomagpie/plugin/exec"
-	"gomagpie/store"
 
 	"github.com/spf13/cobra"
 )
@@ -132,18 +131,18 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		cfg.ExporterCmd = o.ExporterCmd
 	}
 	// Pre-I/O: an unknown fingerprint must exit 2, never burn a fetch.
-	if !fetch.ValidBrowser(o.Browser) {
-		return fail(2, "crawl: browser %q must be chrome|firefox|random", o.Browser)
+	if err := checkBrowser("crawl", o.Browser); err != nil {
+		return err
 	}
 	if o.IgnoreRobots {
 		fmt.Fprintln(os.Stderr, "WARNING: --ignore-robots set; fetching despite robots.txt")
 	}
 
-	db, err := store.Open(cfg.CacheDB)
+	db, err := openCmdDB(cfg)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }() //nolint:errcheck // end of command; close error unactionable
+	defer closeDB(db)
 
 	runID := o.Resume
 	resuming := runID != ""

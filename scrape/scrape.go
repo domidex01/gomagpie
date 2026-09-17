@@ -28,6 +28,9 @@ var ErrMissingKey = errors.New("missing API key")
 
 // Deps injects CLI-owned constructors so scrape never imports the CLI
 // package (which would cycle once serve lives there).
+// Deps must be safe for concurrent use: Batch fans one Deps out over N
+// goroutines sharing DB and the constructors. Nil-schema (markdown-only)
+// runs never call ExtractorFor; *store.DB handles concurrent readers.
 type Deps struct {
 	DB           *store.DB
 	ExtractorFor func(provider, key, model string, sch *extract.Schema, runID string) (extract.Extractor, error)

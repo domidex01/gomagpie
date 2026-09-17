@@ -107,7 +107,7 @@ func cleanPDF(raw RawPage) (CleanedPage, error) {
 		Title:    title,
 		FinalURL: raw.FinalURL,
 	}
-	out.Quality = Classify(out, raw.StatusCode, nil, true)
+	out.Quality = ClassifyPDF(out, raw.StatusCode)
 	return out, nil
 }
 

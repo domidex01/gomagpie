@@ -92,6 +92,42 @@ func newZenExtractor(provider, key, model string, sch *extract.Schema, log func(
 	return a, nil
 }
 
+// openCmdDB opens the cache DB from resolved config. Called after all
+// flag validation so usage errors fail before any I/O or file creation.
+// Caller defers closeDB(db). One home so new commands stop copying the
+// open + nolint-close pair (it already drifted 4×).
+func openCmdDB(cfg config.Config) (*store.DB, error) {
+	return store.Open(cfg.CacheDB)
+}
+
+// closeDB closes the command DB; end-of-command close errors are unactionable.
+func closeDB(db *store.DB) {
+	_ = db.Close() //nolint:errcheck // end of command; close error unactionable
+}
+
+// checkBrowser rejects unknown TLS fingerprints pre-I/O (exit 2). One
+// home so scrape, crawl, batch can't drift; scrape.Run re-validates for
+// the MCP path, which never touches the CLI.
+func checkBrowser(cmd, name string) error {
+	if !fetch.ValidBrowser(name) {
+		return fail(2, "%s: browser %q must be chrome|firefox|random", cmd, name)
+	}
+	return nil
+}
+
+// scrapeDeps builds the pipeline Deps over db with the CLI extractor
+// wiring. Shared so batch's goroutine fan-out uses the exact same
+// constructors as single scrapes (thread-safety contract: see Deps).
+func scrapeDeps(db *store.DB, cfg config.Config) scrape.Deps {
+	return scrape.Deps{
+		DB: db,
+		ExtractorFor: func(p, key, m string, s *extract.Schema, runID string) (extract.Extractor, error) {
+			return newExtractor(p, key, m, s, db, runID)
+		},
+		APIKeyFor: cfg.APIKey,
+	}
+}
+
 // scrapeExit maps shared pipeline errors to exit codes, mirroring the
 // runScrape switch: missing key → 7, cost ceiling → 6, quality → 8,
 // vertical mismatch → 2, non-public address → 2. One home so new

@@ -93,6 +93,14 @@ func QualityIssue(err error) Issue {
 // is scoped HTML, so a byte test would be fragile): PDF bodies are
 // binary, so both body-bytes rules are disabled and the pdf-empty rule
 // owns the empty case.
+// ClassifyPDF classifies extracted PDF text: binary bodies must not feed
+// the body-bytes rules, and zero words is IssueEmpty (never silent empty
+// success). The isPDF branch lives in Classify; this wrapper keeps call
+// sites readable instead of a trailing bare bool.
+func ClassifyPDF(p CleanedPage, statusCode int) Issue {
+	return Classify(p, statusCode, nil, true)
+}
+
 func Classify(p CleanedPage, statusCode int, body []byte, isPDF bool) Issue {
 	if isPDF {
 		// Binary noise must not feed bodyIsRicher or the marker rules —

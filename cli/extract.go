@@ -118,11 +118,11 @@ func runExtract(ctx context.Context, o extractOptions) error {
 		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
 	}
 
-	db, err := store.Open(cfg.CacheDB)
+	db, err := openCmdDB(cfg)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }() //nolint:errcheck // end of command; close error unactionable
+	defer closeDB(db)
 	runID := uuidNew()
 	if err := db.BeginRun(runID, "extract"); err != nil {
 		return err
@@ -177,13 +177,7 @@ func runExtractPrompt(ctx context.Context, db *store.DB, runID string, cfg confi
 		finish(0, 0, "error")
 		return fail(2, "extract: --provider auto: no provider has a key (tried %s)", strings.Join(scrape.AutoProviderOrder, ", "))
 	}
-	pr, err := scrape.Prompt(ctx, scrape.Deps{
-		DB: db,
-		ExtractorFor: func(p, key, m string, s *extract.Schema, runID string) (extract.Extractor, error) {
-			return newExtractor(p, key, m, s, db, runID)
-		},
-		APIKeyFor: cfg.APIKey,
-	}, runID, scrape.PromptOptions{
+	pr, err := scrape.Prompt(ctx, scrapeDeps(db, cfg), runID, scrape.PromptOptions{
 		Provider: provider, Model: model, MaxCost: cfg.MaxCost,
 		System: "Reply with plain text only, no JSON.",
 		User:   o.Prompt + "\n\nPage markdown:\n" + cleaned.Markdown, Purpose: "extract",

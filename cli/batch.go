@@ -10,10 +10,7 @@ import (
 	"strings"
 
 	"gomagpie/clean"
-	"gomagpie/extract"
-	"gomagpie/fetch"
 	"gomagpie/scrape"
-	"gomagpie/store"
 
 	"github.com/spf13/cobra"
 )
@@ -91,23 +88,17 @@ func runBatch(ctx context.Context, urls []string, o batchOptions) error {
 	if format != "jsonl" && format != "json" {
 		return fail(2, "batch: --format %q must be jsonl|json", o.Format)
 	}
-	if !fetch.ValidBrowser(o.Browser) {
-		return fail(2, "batch: browser %q must be chrome|firefox|random", o.Browser)
+	if err := checkBrowser("batch", o.Browser); err != nil {
+		return err
 	}
 
-	db, err := store.Open(cfg.CacheDB)
+	db, err := openCmdDB(cfg)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }() //nolint:errcheck // end of command; close error unactionable
+	defer closeDB(db)
 
-	items, err := scrape.Batch(ctx, scrape.Deps{
-		DB: db,
-		ExtractorFor: func(p, key, m string, s *extract.Schema, runID string) (extract.Extractor, error) {
-			return newExtractor(p, key, m, s, db, runID)
-		},
-		APIKeyFor: cfg.APIKey,
-	}, urls, scrape.BatchOptions{
+	items, err := scrape.Batch(ctx, scrapeDeps(db, cfg), urls, scrape.BatchOptions{
 		Concurrency: o.Concurrency, Render: o.Render, Profile: o.Profile,
 		Browser: o.Browser, Cookies: o.Cookies,
 		Scope: clean.Scope{Include: o.Include, Exclude: o.Exclude, OnlyMainContent: o.OnlyMainContent},

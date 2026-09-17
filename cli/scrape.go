@@ -7,9 +7,7 @@ import (
 	"gomagpie/clean"
 	"gomagpie/config"
 	"gomagpie/extract"
-	"gomagpie/fetch"
 	"gomagpie/scrape"
-	"gomagpie/store"
 	"gomagpie/vertical"
 
 	"github.com/spf13/cobra"
@@ -106,10 +104,8 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 			return fail(2, "page-format %q must be markdown|llm|text|json", o.PageFormat)
 		}
 	}
-	// CLI-side check so an unknown --browser exits 2, not scrapeExit's
-	// default arm (exit 1). Run's own validation is the MCP-side gate.
-	if !fetch.ValidBrowser(o.Browser) {
-		return fail(2, "browser %q must be chrome|firefox|random", o.Browser)
+	if err := checkBrowser("scrape", o.Browser); err != nil {
+		return err
 	}
 	// Unknown vertical names fail pre-I/O: no fetch, no DB touched beyond open.
 	if o.Vertical != "" && o.Vertical != "auto" {
@@ -118,11 +114,11 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		}
 	}
 
-	db, err := store.Open(cfg.CacheDB)
+	db, err := openCmdDB(cfg)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }() //nolint:errcheck // end of command; close error unactionable
+	defer closeDB(db)
 
 	provider := cfg.ExtractProvider
 	if o.Provider != "" {
@@ -141,13 +137,7 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		}
 	}
 
-	res, err := scrape.Run(ctx, scrape.Deps{
-		DB: db,
-		ExtractorFor: func(p, key, m string, s *extract.Schema, runID string) (extract.Extractor, error) {
-			return newExtractor(p, key, m, s, db, runID)
-		},
-		APIKeyFor: cfg.APIKey,
-	}, rawURL, scrape.Options{
+	res, err := scrape.Run(ctx, scrapeDeps(db, cfg), rawURL, scrape.Options{
 		Schema: sch, Render: cfg.Render, Provider: provider, Model: model,
 		MaxCost: cfg.MaxCost, UseCache: !cfg.NoCache,
 		PageFormat: o.PageFormat,
