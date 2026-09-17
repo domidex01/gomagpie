@@ -5,6 +5,45 @@ import (
 	"strings"
 )
 
+// BraceObjects yields top-level balanced-brace fragments of s (JSON aware:
+// braces inside strings don't count). Shared primitive behind
+// PlayerResponseHTML and vertical's JSON-LD fallback scan.
+func BraceObjects(s string) []string {
+	var out []string
+	depth, start, inStr, esc := 0, -1, false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			if esc {
+				esc = false
+			} else if c == '\\' {
+				esc = true
+			} else if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+				if depth == 0 && start >= 0 {
+					out = append(out, s[start:i+1])
+					start = -1
+				}
+			}
+		}
+	}
+	return out
+}
+
 // PlayerResponseHTML locates ytInitialPlayerResponse in page HTML and parses
 // the balanced-brace object that follows it. Single home for the scan —
 // vertical/youtube.go reuses this (vertical → clean is the allowed import
@@ -21,37 +60,15 @@ func PlayerResponseHTML(html []byte) (map[string]any, bool) {
 	if j < 0 {
 		return nil, false
 	}
-	frag := rest[j:]
-	depth, inStr, esc := 0, false, false
-	for k := 0; k < len(frag); k++ {
-		c := frag[k]
-		if inStr {
-			if esc {
-				esc = false
-			} else if c == '\\' {
-				esc = true
-			} else if c == '"' {
-				inStr = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inStr = true
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				var m map[string]any
-				if err := json.Unmarshal([]byte(frag[:k+1]), &m); err != nil {
-					return nil, false
-				}
-				return m, true
-			}
-		}
+	objs := BraceObjects(rest[j:])
+	if len(objs) == 0 {
+		return nil, false // truncated braces — fail closed, never panic
 	}
-	return nil, false // truncated braces — fail closed, never panic
+	var m map[string]any
+	if err := json.Unmarshal([]byte(objs[0]), &m); err != nil {
+		return nil, false
+	}
+	return m, true
 }
 
 // PlayerDetails picks videoDetails{title, author, shortDescription,

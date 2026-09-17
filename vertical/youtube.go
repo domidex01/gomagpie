@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"gomagpie/clean"
@@ -66,8 +65,8 @@ func extractYouTube(ctx context.Context, f Fetcher, u *url.URL) (map[string]any,
 					"title":       title,
 					"author":      str(vd, "author"),
 					"description": str(vd, "shortDescription"),
-					"views":       youTubeNum(vd, "viewCount"),
-					"duration_s":  youTubeNum(vd, "lengthSeconds"),
+					"views":       num(vd, "viewCount"),
+					"duration_s":  num(vd, "lengthSeconds"),
 					"url":         watchURL,
 				}, nil
 			}
@@ -86,17 +85,4 @@ func extractYouTube(ctx context.Context, f Fetcher, u *url.URL) (map[string]any,
 		"duration_s":  float64(0),
 		"url":         watchURL,
 	}, nil
-}
-
-// youTubeNum converts the player's string numbers; garbage → 0, never error.
-func youTubeNum(vd map[string]any, key string) float64 {
-	s, _ := vd[key].(string)
-	if s == "" {
-		return num(vd, key)
-	}
-	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil {
-		return 0
-	}
-	return f
 }

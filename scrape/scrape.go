@@ -94,10 +94,14 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		return Result{}, fmt.Errorf("scrape: page format %q must be markdown|llm|text|json", o.PageFormat)
 	}
 	// Unknown vertical names fail before any I/O, like a bogus page format.
+	// The resolved extractor rides along for the dispatch below — one Lookup.
+	var explicit *vertical.Extractor
 	if o.Vertical != "" && o.Vertical != "auto" {
-		if _, ok := vertical.Lookup(o.Vertical); !ok {
+		ex, ok := vertical.Lookup(o.Vertical)
+		if !ok {
 			return Result{}, fmt.Errorf("scrape: vertical %q unknown (see `magpie vertical --list`)", o.Vertical)
 		}
+		explicit = &ex
 	}
 
 	runID := uuidNew()
@@ -146,15 +150,13 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	}
 	base.Rendered = rendered
 
-	if o.Vertical != "" && o.Vertical != "auto" {
-		// Validated pre-I/O above; Lookup cannot fail here.
-		ex, _ := vertical.Lookup(o.Vertical)
+	if explicit != nil {
 		// ^ --list ships in Phase C; the message names it anyway so the string never changes.
-		if u, err := url.Parse(rawURL); err != nil || !ex.Match(u) {
+		if u, err := url.Parse(rawURL); err != nil || !explicit.Match(u) {
 			finish(0, 1, "error")
 			return Result{}, fmt.Errorf("scrape: vertical %q: %w for %s", o.Vertical, vertical.ErrURLMismatch, rawURL)
 		}
-		return runVertical(ctx, vf, rawURL, ex, base, finish)
+		return runVertical(ctx, vf, rawURL, *explicit, base, finish)
 	}
 	if o.Vertical == "auto" {
 		if ex, ok := vertical.MatchURL(rawURL); ok {

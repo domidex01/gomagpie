@@ -100,12 +100,13 @@ func extractEcommerce(ctx context.Context, f Fetcher, u *url.URL) (map[string]an
 		return nil, err
 	}
 	sidecar := clean.HarvestSidecar(body)
+	blocks := productBlocks(sidecar)
 	if len(sidecar) == 0 {
 		// HarvestSidecar misses non-ld JSON-LD spellings (case/whitespace
 		// variants); scan the raw HTML for @type Product blocks directly.
-		sidecar = scanProductBlocks(body)
+		blocks = scanProductBlocks(body)
 	}
-	for _, block := range splitBlocks(sidecar) {
+	for _, block := range blocks {
 		var m map[string]any
 		if err := json.Unmarshal(block, &m); err != nil || !isProductType(m["@type"]) {
 			continue
@@ -115,8 +116,9 @@ func extractEcommerce(ctx context.Context, f Fetcher, u *url.URL) (map[string]an
 	return nil, fmt.Errorf("vertical: ecommerce: no product data at %s", u.String())
 }
 
-// splitBlocks handles HarvestSidecar's array-or-single output shapes.
-func splitBlocks(sidecar []byte) []json.RawMessage {
+// productBlocks normalizes HarvestSidecar's array-or-single output shape
+// into a plain list.
+func productBlocks(sidecar []byte) []json.RawMessage {
 	if len(sidecar) == 0 {
 		return nil
 	}
@@ -133,7 +135,7 @@ func splitBlocks(sidecar []byte) []json.RawMessage {
 
 // scanProductBlocks is the fallback for JSON-LD the goquery harvest missed:
 // it extracts balanced-brace objects containing a Product @type marker.
-func scanProductBlocks(html []byte) json.RawMessage {
+func scanProductBlocks(html []byte) []json.RawMessage {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(html))
 	if err != nil {
 		return nil
@@ -144,60 +146,13 @@ func scanProductBlocks(html []byte) json.RawMessage {
 		if t == "" || !strings.Contains(t, "Product") {
 			return
 		}
-		for _, frag := range braceObjects(t) {
+		for _, frag := range clean.BraceObjects(t) {
 			if json.Valid([]byte(frag)) && strings.Contains(frag, "Product") {
 				blocks = append(blocks, json.RawMessage(frag))
 			}
 		}
 	})
-	if len(blocks) == 0 {
-		return nil
-	}
-	if len(blocks) == 1 {
-		return blocks[0]
-	}
-	joined, err := json.Marshal(blocks)
-	if err != nil {
-		return blocks[0]
-	}
-	return joined
-}
-
-// braceObjects yields top-level balanced-brace fragments of s.
-func braceObjects(s string) []string {
-	var out []string
-	depth, start, inStr, esc := 0, -1, false, false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if inStr {
-			if esc {
-				esc = false
-			} else if c == '\\' {
-				esc = true
-			} else if c == '"' {
-				inStr = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inStr = true
-		case '{':
-			if depth == 0 {
-				start = i
-			}
-			depth++
-		case '}':
-			if depth > 0 {
-				depth--
-				if depth == 0 && start >= 0 {
-					out = append(out, s[start:i+1])
-					start = -1
-				}
-			}
-		}
-	}
-	return out
+	return blocks
 }
 
 func isProductType(t any) bool {

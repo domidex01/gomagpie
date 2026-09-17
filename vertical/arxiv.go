@@ -28,6 +28,7 @@ func matchArxiv(u *url.URL) bool {
 	if !hostIs(u, "arxiv.org", "www.arxiv.org", "export.arxiv.org") {
 		return false
 	}
+	// New-style IDs only (2401.12345); legacy hep-th/9901001 paths don't match.
 	segs := pathSegs(u.Path)
 	return len(segs) == 2 && (segs[0] == "abs" || segs[0] == "pdf") && segs[1] != ""
 }

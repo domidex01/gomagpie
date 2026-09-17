@@ -190,14 +190,25 @@ func hostIs(u *url.URL, hosts ...string) bool {
 	return false
 }
 
+// pathSegs splits a URL path into non-empty segments. Single home for
+// path-shape matching (github kinds, reddit permalinks, arxiv, handles).
+func pathSegs(p string) []string {
+	raw := strings.Split(strings.Trim(p, "/"), "/")
+	out := raw[:0]
+	for _, s := range raw {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // lastSegment returns the last non-empty path segment (registry names,
 // handles, IDs).
 func lastSegment(p string) string {
-	segs := strings.Split(strings.TrimSuffix(p, "/"), "/")
-	for i := len(segs) - 1; i >= 0; i-- {
-		if segs[i] != "" {
-			return segs[i]
-		}
+	segs := pathSegs(p)
+	if len(segs) == 0 {
+		return ""
 	}
-	return ""
+	return segs[len(segs)-1]
 }

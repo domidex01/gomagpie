@@ -45,17 +45,6 @@ func matchGithub(u *url.URL) bool {
 	return false
 }
 
-func pathSegs(p string) []string {
-	raw := strings.Split(strings.Trim(p, "/"), "/")
-	out := raw[:0]
-	for _, s := range raw {
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 func extractGithub(ctx context.Context, f Fetcher, u *url.URL) (map[string]any, error) {
 	segs := pathSegs(u.Path)
 	owner, repo := segs[0], segs[1]
@@ -108,7 +97,7 @@ func extractGithub(ctx context.Context, f Fetcher, u *url.URL) (map[string]any, 
 			"url":      canon + "/" + segs[2] + "/" + n,
 		}, nil
 	case "releases":
-		if len(segs) >= 4 && segs[2] == "releases" && len(segs) >= 5 && segs[3] == "tag" {
+		if len(segs) >= 5 && segs[3] == "tag" {
 			tag := segs[4]
 			m, err := fetchJSON(ctx, f, base+"/releases/tags/"+tag)
 			if err != nil {
