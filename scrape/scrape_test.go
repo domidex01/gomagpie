@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"gomagpie/clean"
 	"gomagpie/crawl"
 	"gomagpie/extract"
 	"gomagpie/scrape"
@@ -197,5 +199,139 @@ func TestRun_CacheHitZeroCalls(t *testing.T) {
 	}
 	if got := fx2.total(); got != 1 {
 		t.Errorf("no-cache Run made %d extractor calls, want 1", got)
+	}
+}
+
+func TestRun_PageFormatLLM(t *testing.T) {
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openScrapeDB(t)
+	res, err := scrape.Run(context.Background(), fakeDeps(db, fx, ""), scrapeOrigin(t, scrapeHTML), scrape.Options{Render: "static", PageFormat: "llm"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(res.Rendered, "## Links") && !strings.Contains(res.Rendered, "# Widget") {
+		t.Errorf("llm Rendered missing envelope:\n%s", res.Rendered)
+	}
+	if res.Markdown == "" {
+		t.Error("Markdown empty despite page format")
+	}
+}
+
+func TestRun_PageFormatJSON(t *testing.T) {
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openScrapeDB(t)
+	res, err := scrape.Run(context.Background(), fakeDeps(db, fx, ""), scrapeOrigin(t, scrapeHTML), scrape.Options{Render: "static", PageFormat: "json"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(res.Rendered), &doc); err != nil {
+		t.Fatalf("rendered json invalid: %v", err)
+	}
+	for _, k := range []string{"url", "final_url", "title", "markdown", "structured_data", "content", "metadata", "links", "word_count"} {
+		if _, ok := doc[k]; !ok {
+			t.Errorf("rendered json missing key %q", k)
+		}
+	}
+}
+
+func TestRun_PageFormatBogus(t *testing.T) {
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openScrapeDB(t)
+	if _, err := scrape.Run(context.Background(), fakeDeps(db, fx, ""), scrapeOrigin(t, scrapeHTML), scrape.Options{Render: "static", PageFormat: "bogus"}); err == nil {
+		t.Error("bogus page format: want error")
+	}
+}
+
+func TestRun_ScopePassthrough(t *testing.T) {
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openScrapeDB(t)
+	shell := `<html><head><title>Shell</title></head><body><nav>nav-text-here</nav><article><h1>Scoped Headline</h1><p>Enough honest prose in the scoped article branch to survive trafilatura extraction cleanly.</p></article></body></html>`
+	res, err := scrape.Run(context.Background(), fakeDeps(db, fx, ""), scrapeOrigin(t, shell), scrape.Options{
+		Render: "static", Scope: clean.Scope{Include: []string{"article"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(res.Markdown, "Scoped Headline") {
+		t.Errorf("scoped markdown lost article:\n%s", res.Markdown)
+	}
+	if strings.Contains(res.Markdown, "nav-text-here") {
+		t.Errorf("scoped markdown kept nav:\n%s", res.Markdown)
+	}
+}
+
+func TestRun_ProfileCookiesPassthrough(t *testing.T) {
+	var ua, ck string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua, ck = r.Header.Get("User-Agent"), r.Header.Get("Cookie")
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(scrapeHTML)) //nolint:errcheck // httptest local; short write unactionable
+	}))
+	t.Cleanup(srv.Close)
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openScrapeDB(t)
+	if _, err := scrape.Run(context.Background(), fakeDeps(db, fx, ""), srv.URL, scrape.Options{Render: "static", Profile: "chrome", Cookies: "a=b"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(ua, "Chrome/126") {
+		t.Errorf("server saw UA %q, want chrome", ua)
+	}
+	if ck != "a=b" {
+		t.Errorf("server saw Cookie %q, want a=b", ck)
+	}
+}
+
+func qualityOrigin(t *testing.T, status int, file string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "quality", file+".html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(status)
+		_, _ = w.Write(raw) //nolint:errcheck // httptest local; short write unactionable
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestRun_QualityPassthrough(t *testing.T) {
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openScrapeDB(t)
+	_, err := scrape.Run(context.Background(), fakeDeps(db, fx, "k"), qualityOrigin(t, 403, "challenge-akamai"), scrape.Options{Render: "static"})
+	if !errors.Is(err, clean.ErrQuality) {
+		t.Fatalf("err = %v, want ErrQuality", err)
+	}
+	if strings.Contains(err.Error(), "fetch: HTTP") {
+		t.Errorf("err %q still carries old non-2xx text", err)
+	}
+	if !strings.Contains(err.Error(), "access-denied") {
+		t.Errorf("err %q lacks issue", err)
+	}
+}
+
+func TestRun_QualityNoCacheWrite(t *testing.T) {
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openScrapeDB(t)
+	sch := testSchema(t)
+	origin := qualityOrigin(t, 403, "challenge-akamai")
+	_, err := scrape.Run(context.Background(), fakeDeps(db, fx, "k"), origin, scrape.Options{
+		Schema: sch, Render: "static", Provider: "fake", UseCache: true,
+	})
+	if !errors.Is(err, clean.ErrQuality) {
+		t.Fatalf("err = %v, want ErrQuality", err)
+	}
+	if got := fx.total(); got != 0 {
+		t.Errorf("quality failure made %d extractor calls, want 0", got)
+	}
+	// No selector-cache row for the blocked host.
+	u, uerr := url.Parse(origin)
+	if uerr != nil {
+		t.Fatal(uerr)
+	}
+	if _, ok, gerr := db.GetSelectors(strings.ToLower(u.Host), selector.SchemaHash(sch)); gerr != nil || ok {
+		t.Errorf("GetSelectors = (%v, %v), want not-found", ok, gerr)
 	}
 }

@@ -35,12 +35,16 @@ type Deps struct {
 
 // Options configures one scrape. A nil Schema means markdown-only (no LLM).
 type Options struct {
-	Schema   *extract.Schema
-	Render   string // auto|static|browser ("" = auto)
-	Provider string
-	Model    string
-	MaxCost  float64
-	UseCache bool
+	Schema     *extract.Schema
+	Render     string // auto|static|browser ("" = auto)
+	Provider   string
+	Model      string
+	MaxCost    float64
+	UseCache   bool
+	PageFormat string // markdown|llm|text|json ("" = markdown)
+	Scope      clean.Scope
+	Profile    string
+	Cookies    string
 }
 
 // Result is one scraped page.
@@ -56,6 +60,7 @@ type Result struct {
 	Usage          extract.TokenUsage
 	Provider       string
 	Model          string
+	Rendered       string
 }
 
 // Run fetches, cleans, and optionally extracts one URL.
@@ -88,19 +93,32 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		finish(0, 1, "error")
 		return Result{}, err
 	}
-	page, err := fetchURL(ctx, static, rawURL, render)
+	page, err := fetchURL(ctx, static, rawURL, render, o.Profile, o.Cookies)
 	if err != nil {
 		finish(0, 1, "error")
 		return Result{}, err
 	}
 
-	cleaned, err := clean.Clean(ctx, clean.RawPage{HTML: page.HTML, URL: page.URL, FinalURL: page.FinalURL})
+	cleaned, err := clean.Clean(ctx, clean.RawPage{
+		HTML: page.HTML, URL: page.URL, FinalURL: page.FinalURL,
+		Scope: o.Scope, StatusCode: page.StatusCode,
+	})
 	if err != nil {
 		finish(0, 1, "error")
 		return Result{}, err
 	}
+	if cleaned.Quality != clean.IssueNone {
+		finish(0, 1, "error")
+		return Result{}, fmt.Errorf("scrape: quality blocked (%s) for %s: %w", cleaned.Quality, rawURL, clean.ErrQuality)
+	}
 	base := Result{RunID: runID, URL: page.URL, FinalURL: cleaned.FinalURL, Title: cleaned.Title,
 		Markdown: cleaned.Markdown, StructuredData: cleaned.StructuredData}
+	rendered, rerr := clean.Render(cleaned, o.PageFormat)
+	if rerr != nil {
+		finish(0, 1, "error")
+		return Result{}, rerr
+	}
+	base.Rendered = rendered
 
 	// No schema → markdown only, no LLM.
 	if o.Schema == nil {
@@ -157,16 +175,15 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	return base, nil
 }
 
-func fetchURL(ctx context.Context, static *fetch.StaticFetcher, rawURL, render string) (*fetch.FetchResponse, error) {
+func fetchURL(ctx context.Context, static *fetch.StaticFetcher, rawURL, render, profile, cookies string) (*fetch.FetchResponse, error) {
 	if render == "browser" {
 		return fetchBrowser(ctx, rawURL)
 	}
-	resp, err := static.Fetch(ctx, fetch.FetchRequest{URL: rawURL})
+	// A4 pass-through: every status reaches Clean+Classify so blocked pages
+	// get typed quality errors instead of "fetch: HTTP %d".
+	resp, err := static.Fetch(ctx, fetch.FetchRequest{URL: rawURL, Profile: profile, Cookies: cookies})
 	if err != nil {
 		return nil, err
-	}
-	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("fetch: HTTP %d for %s", resp.StatusCode, rawURL)
 	}
 	if render == "static" {
 		return resp, nil

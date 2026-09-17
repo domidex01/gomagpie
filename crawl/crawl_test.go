@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,8 +23,12 @@ import (
 
 	"gomagpie/extract"
 	"gomagpie/fetch"
+	"gomagpie/selector"
 	"gomagpie/store"
 )
+
+// selectorHash mirrors production's schemaHash for cache assertions.
+func selectorHash(sch *extract.Schema) string { return selector.SchemaHash(sch) }
 
 // --- fakes ---
 
@@ -704,5 +710,60 @@ func TestHooks_NilSafe(t *testing.T) {
 	withoutHooks := run(t, false)
 	if withHooks.PagesOK != withoutHooks.PagesOK || withHooks.PagesErr != withoutHooks.PagesErr {
 		t.Errorf("hooked %+v != nil-hook %+v (hooks must not change results)", withHooks, withoutHooks)
+	}
+}
+
+func TestCrawl_QualityCountedNotCached(t *testing.T) {
+	denyBody, err := os.ReadFile("../testdata/quality/challenge-akamai.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goodHTML := `<html><head><title>Good</title></head><body><h1>Good page</h1><p>` +
+		strings.Repeat("honest crawlable prose ", 30) +
+		`</p><a href="/deny">deny</a></body></html>`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/deny":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write(denyBody) //nolint:errcheck // httptest local; short write unactionable
+		default:
+			_, _ = w.Write([]byte(goodHTML)) //nolint:errcheck // httptest local; short write unactionable
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+	out := filepath.Join(t.TempDir(), "r.jsonl")
+	res, err := Run(context.Background(), Options{
+		SeedURL: srv.URL + "/", Schema: mustTestSchema(t),
+		MaxPages: 10, MaxDepth: 1, SameHost: true,
+		FetchWorkers: 2, Rate: 1000, Format: "jsonl", Out: out,
+		DB: db, Extractor: fx,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.PagesErr < 1 {
+		t.Errorf("pages_err = %d, want ≥1", res.PagesErr)
+	}
+	if res.Records != 1 {
+		t.Errorf("records = %d, want 1 (good page only)", res.Records)
+	}
+	raw, rerr := os.ReadFile(out)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if strings.Contains(string(raw), "/deny") {
+		t.Errorf("writer output contains blocked URL:\n%s", raw)
+	}
+	u, uerr := url.Parse(srv.URL)
+	if uerr != nil {
+		t.Fatal(uerr)
+	}
+	if _, ok, gerr := db.GetSelectors(strings.ToLower(u.Host), selectorHash(mustTestSchema(t))); gerr == nil && ok {
+		t.Error("selector cache written despite quality failure path")
 	}
 }

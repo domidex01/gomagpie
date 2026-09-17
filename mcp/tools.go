@@ -27,10 +27,16 @@ var defaultCrawlSchema = []byte(`{"type":"object","properties":{"title":{"type":
 
 // ScrapeIn is the scrape_url input.
 type ScrapeIn struct {
-	URL      string         `json:"url" jsonschema:"absolute http(s) or file URL to scrape"`
-	Schema   map[string]any `json:"schema,omitempty" jsonschema:"JSON Schema object; omit for cleaned markdown only"`
-	Render   string         `json:"render,omitempty" jsonschema:"auto, static, or browser"`
-	UseCache *bool          `json:"use_cache,omitempty" jsonschema:"apply cached selectors when available"`
+	URL             string         `json:"url" jsonschema:"absolute http(s) or file URL to scrape"`
+	Schema          map[string]any `json:"schema,omitempty" jsonschema:"JSON Schema object; omit for cleaned markdown only"`
+	Render          string         `json:"render,omitempty" jsonschema:"auto, static, or browser"`
+	UseCache        *bool          `json:"use_cache,omitempty" jsonschema:"apply cached selectors when available"`
+	PageFormat      string         `json:"page_format,omitempty" jsonschema:"page output format: markdown, llm, text, or json"`
+	Include         []string       `json:"include,omitempty" jsonschema:"CSS selectors: scrape only matching subtrees"`
+	Exclude         []string       `json:"exclude,omitempty" jsonschema:"CSS selectors: drop matching nodes"`
+	OnlyMainContent *bool          `json:"only_main_content,omitempty" jsonschema:"main-content only"`
+	Profile         string         `json:"profile,omitempty" jsonschema:"header profile: default, chrome, or firefox"`
+	Cookies         string         `json:"cookies,omitempty" jsonschema:"raw Cookie header value"`
 }
 
 // ScrapeOut is the scrape_url output.
@@ -39,6 +45,7 @@ type ScrapeOut struct {
 	FinalURL  string         `json:"final_url" jsonschema:"final URL after redirects"`
 	Title     string         `json:"title" jsonschema:"page title"`
 	Markdown  string         `json:"markdown,omitempty" jsonschema:"cleaned markdown (no schema)"`
+	Content   string         `json:"content,omitempty" jsonschema:"rendered page content in page_format (no schema)"`
 	Extracted map[string]any `json:"extracted,omitempty" jsonschema:"extracted record (with schema)"`
 	FromCache bool           `json:"from_cache" jsonschema:"served from selector cache with zero LLM calls"`
 	Usage     map[string]any `json:"usage,omitempty" jsonschema:"LLM usage when the extractor ran"`
@@ -61,9 +68,16 @@ func handleScrape(d Deps) func(context.Context, *sdk.CallToolRequest, ScrapeIn) 
 		if in.UseCache != nil {
 			useCache = *in.UseCache
 		}
+		var onlyMain bool
+		if in.OnlyMainContent != nil {
+			onlyMain = *in.OnlyMainContent
+		}
 		res, err := scrape.Run(ctx, d.ScrapeDeps, in.URL, scrape.Options{
 			Schema: sch, Render: in.Render, Provider: d.DefaultProvider,
 			Model: d.DefaultModel, MaxCost: d.MaxCost, UseCache: useCache,
+			PageFormat: in.PageFormat,
+			Scope:      clean.Scope{Include: in.Include, Exclude: in.Exclude, OnlyMainContent: onlyMain},
+			Profile:    in.Profile, Cookies: in.Cookies,
 		})
 		if err != nil {
 			return nil, ScrapeOut{}, fmt.Errorf("mcp: scrape_url: %w", err)
@@ -71,6 +85,9 @@ func handleScrape(d Deps) func(context.Context, *sdk.CallToolRequest, ScrapeIn) 
 		out := ScrapeOut{URL: res.URL, FinalURL: res.FinalURL, Title: res.Title, FromCache: res.FromCache}
 		if sch == nil {
 			out.Markdown = res.Markdown
+			if in.PageFormat != "" {
+				out.Content = res.Rendered
+			}
 		} else {
 			out.Extracted = res.Record
 			if !res.FromCache {

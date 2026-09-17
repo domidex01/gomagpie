@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
+	"gomagpie/clean"
 	"gomagpie/config"
 	"gomagpie/crawl"
 	"gomagpie/extract"
@@ -17,6 +19,9 @@ import (
 func newScrapeCmd() *cobra.Command {
 	var schema, render, provider, model, out, format string
 	var noCache bool
+	var pageFormat, headerProfile, cookies string
+	var include, exclude []string
+	var onlyMainContent bool
 	cmd := &cobra.Command{
 		Use:   "scrape <url>",
 		Short: "Fetch → clean → extract a single URL",
@@ -25,6 +30,8 @@ func newScrapeCmd() *cobra.Command {
 			return runScrape(cmd.Context(), args[0], scrapeOptions{
 				Schema: schema, Render: render, Provider: provider, Model: model,
 				Out: out, Format: format, NoCache: noCache,
+				PageFormat: pageFormat, Include: include, Exclude: exclude,
+				OnlyMainContent: onlyMainContent, HeaderProfile: headerProfile, Cookies: cookies,
 			})
 		},
 	}
@@ -35,6 +42,12 @@ func newScrapeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&out, "out", "", "output path (default stdout)")
 	cmd.Flags().StringVar(&format, "format", "", "json|jsonl (csv|sqlite not supported in Phase 1)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "bypass selector cache")
+	cmd.Flags().StringVar(&pageFormat, "page-format", "", "page output format: markdown|llm|text|json")
+	cmd.Flags().StringSliceVar(&include, "include", nil, "comma-separated CSS selectors: scrape only matching subtrees")
+	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "comma-separated CSS selectors: drop matching nodes")
+	cmd.Flags().BoolVar(&onlyMainContent, "only-main-content", false, "main-content only (trafilatura already does this)")
+	cmd.Flags().StringVar(&headerProfile, "header-profile", "", "request header bundle: default|chrome|firefox")
+	cmd.Flags().StringVar(&cookies, "cookies", "", "raw Cookie header value, e.g. \"a=b; c=d\"")
 	return cmd
 }
 
@@ -46,6 +59,14 @@ type scrapeOptions struct {
 	Out      string
 	Format   string
 	NoCache  bool
+	// PageFormat is flag-only: it must never enter config.Config.Format,
+	// which crawl validates as jsonl|json|csv|sqlite.
+	PageFormat      string
+	Include         []string
+	Exclude         []string
+	OnlyMainContent bool
+	HeaderProfile   string
+	Cookies         string
 }
 
 func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
@@ -71,6 +92,13 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 	case "auto", "static", "browser":
 	default:
 		return fail(2, "render %q must be auto|static|browser", cfg.Render)
+	}
+	if o.PageFormat != "" {
+		switch o.PageFormat {
+		case "markdown", "llm", "text", "json":
+		default:
+			return fail(2, "page-format %q must be markdown|llm|text|json", o.PageFormat)
+		}
 	}
 
 	db, err := store.Open(cfg.CacheDB)
@@ -105,6 +133,9 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 	}, rawURL, scrape.Options{
 		Schema: sch, Render: cfg.Render, Provider: provider, Model: model,
 		MaxCost: cfg.MaxCost, UseCache: !cfg.NoCache,
+		PageFormat: o.PageFormat,
+		Scope:      clean.Scope{Include: o.Include, Exclude: o.Exclude, OnlyMainContent: o.OnlyMainContent},
+		Profile:    o.HeaderProfile, Cookies: o.Cookies,
 	})
 	if err != nil {
 		switch {
@@ -112,10 +143,18 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 			return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
 		case errors.Is(err, crawl.ErrCostCeiling):
 			return fail(6, "cost ceiling exceeded: %v", err)
+		case errors.Is(err, clean.ErrQuality):
+			return fail(8, "quality blocked (%s) for %s", qualityOf(err), rawURL)
 		}
 		return err
 	}
 	if sch == nil {
+		if o.PageFormat == "json" {
+			return writeOut(cfg.Out, res.Rendered)
+		}
+		if o.PageFormat == "llm" || o.PageFormat == "text" {
+			return writeOut(cfg.Out, res.Rendered)
+		}
 		mdoc, merr := markdownDoc(res)
 		if merr != nil {
 			return merr
@@ -153,6 +192,17 @@ func applyScrapeFlags(cfg *config.Config, o scrapeOptions) {
 		f.NoCache, f.NoCacheChanged = true, true
 	}
 	cfg.ApplyFlags(f)
+}
+
+func qualityOf(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, "quality blocked ("); i >= 0 {
+		rest := msg[i+len("quality blocked ("):]
+		if j := strings.Index(rest, ")"); j >= 0 {
+			return rest[:j]
+		}
+	}
+	return "blocked"
 }
 
 func markdownDoc(r scrape.Result) (string, error) {

@@ -17,6 +17,8 @@ type RawPage struct {
 	URL           string
 	FinalURL      string
 	StructuredRaw json.RawMessage // pre-harvested sidecar (optional)
+	Scope         Scope           // A2 scoping pre-pass; empty = identity
+	StatusCode    int             // fetch status; 0/200 = same; non-2xx feeds Classify
 }
 
 // CleanedPage is the cleaning output.
@@ -25,6 +27,8 @@ type CleanedPage struct {
 	StructuredData json.RawMessage `json:"structured_data,omitempty"`
 	Title          string          `json:"title"`
 	FinalURL       string          `json:"final_url"`
+	Metadata       Metadata        `json:"metadata,omitempty"`
+	Quality        Issue           `json:"quality,omitempty"`
 }
 
 // Cleaner cleans one page.
@@ -36,21 +40,35 @@ type Cleaner interface {
 const MaxTokens = 8000
 
 // Clean harvests the sidecar first, then trafilatura, then markdown.
+// Quality never fails here: Classify attaches Quality and enforcement
+// happens in scrape.Run / crawl.
 func Clean(ctx context.Context, raw RawPage) (CleanedPage, error) {
 	htmlStr := string(raw.HTML)
+	if len(raw.Scope.Include)+len(raw.Scope.Exclude) > 0 {
+		htmlStr = ApplyScope(htmlStr, raw.Scope, func(string) {})
+	}
 	sidecar := HarvestSidecar(raw.HTML)
 	title := extractTitle(raw.HTML)
-	md, err := trafilaturaToMarkdown(ctx, htmlStr, raw.FinalURL)
+	md, fellBack, err := trafilaturaToMarkdown(ctx, htmlStr, raw.FinalURL)
 	if err != nil {
 		return CleanedPage{}, fmt.Errorf("clean: %w", err)
 	}
 	md = capTokens(md, MaxTokens)
-	return CleanedPage{
+	meta := HarvestMetadata(raw.HTML, raw.FinalURL, md)
+	out := CleanedPage{
 		Markdown:       md,
 		StructuredData: sidecar,
 		Title:          title,
 		FinalURL:       raw.FinalURL,
-	}, nil
+		Metadata:       meta,
+	}
+	// Classify against the scoped document: scoping legitimately narrows
+	// content, so the pre-scope body must not count as "richer".
+	out.Quality = Classify(out, raw.StatusCode, []byte(htmlStr))
+	if out.Quality == IssueNone && fellBack && WordCount(md) < 50 {
+		out.Quality = IssueEmpty // trafilatura found no main content
+	}
+	return out, nil
 }
 
 func extractTitle(page []byte) string {

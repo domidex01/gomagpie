@@ -277,13 +277,25 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 				return core.FetchedPage{}, err
 			}
 		}
+		var last *fetch.FetchResponse
 		resp, err := FetchWithRetry(ctx, func() (*fetch.FetchResponse, error) {
-			return staticFetcher.Fetch(ctx, fetch.FetchRequest{URL: task.URL})
+			r, ferr := staticFetcher.Fetch(ctx, fetch.FetchRequest{URL: task.URL})
+			if ferr == nil {
+				last = r
+			}
+			return r, ferr
 		})
 		if err != nil {
+			// Retry taxonomy (backoff.go) already ran: classify the outcome.
+			if qerr := qualityErr(ctx, task, last); qerr != nil {
+				return core.FetchedPage{Task: task, Err: qerr}, nil
+			}
 			return core.FetchedPage{Task: task, Err: err}, nil
 		}
 		if resp.StatusCode/100 != 2 {
+			if qerr := qualityErr(ctx, task, resp); qerr != nil {
+				return core.FetchedPage{Task: task, Err: qerr}, nil
+			}
 			return core.FetchedPage{Task: task, Err: classify(resp, nil)}, nil
 		}
 		if score, embedded := fetch.ScoreJSRequired(resp.HTML, resp.Headers); !embedded && fetch.NeedsBrowser(score) && isHTTP(task.URL) {
@@ -639,6 +651,26 @@ func validRequired(rec map[string]any, required []string) bool {
 		}
 	}
 	return true
+}
+
+// qualityErr routes a non-2xx response through Clean+Classify, returning a
+// typed ErrQuality error for blocked pages or nil when content is fine.
+// The page lands on the existing page-error path (counted, not cached).
+func qualityErr(ctx context.Context, task core.FetchTask, resp *fetch.FetchResponse) error {
+	if resp == nil || resp.StatusCode/100 == 2 {
+		return nil
+	}
+	finalURL := resp.FinalURL
+	if finalURL == "" {
+		finalURL = task.URL
+	}
+	cleaned, cerr := clean.Clean(ctx, clean.RawPage{
+		HTML: resp.HTML, URL: task.URL, FinalURL: finalURL, StatusCode: resp.StatusCode,
+	})
+	if cerr != nil || cleaned.Quality == clean.IssueNone {
+		return nil
+	}
+	return fmt.Errorf("crawl: quality blocked (%s) for %s: %w", cleaned.Quality, task.URL, clean.ErrQuality)
 }
 
 func domainOf(rawURL string) string {

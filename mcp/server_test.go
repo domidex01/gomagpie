@@ -349,3 +349,70 @@ func TestCrawlSite_Progress(t *testing.T) {
 		t.Error("0 progress notifications on a 3-page crawl, want >= 1")
 	}
 }
+
+func TestScrapeURL_PageFormat(t *testing.T) {
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openMCPDB(t)
+	cs := dialInMemory(t, testMCPServer(t, db, fx), nil)
+	seed := origin3Pages(t)
+	out := decodeOut(t, callTool(t, cs, "scrape_url", map[string]any{"url": seed, "page_format": "llm"}, ""))
+	content, _ := out["content"].(string)
+	if !strings.Contains(content, "## Links") && !strings.Contains(content, "Page A") {
+		t.Errorf("page_format llm content missing envelope: %v", out)
+	}
+	if _, ok := out["markdown"]; !ok {
+		t.Errorf("markdown dropped when page_format set (back-compat break): %v", out)
+	}
+}
+
+func TestScrapeURL_ScopeAndCookies(t *testing.T) {
+	var gotCookie string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><head><title>Shell</title></head><body><nav>nav-marker-text</nav><article><h1>Scoped From MCP</h1><p>Enough honest prose in the MCP-scoped article branch to survive trafilatura extraction cleanly.</p></article></body></html>`)) //nolint:errcheck // httptest local
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openMCPDB(t)
+	cs := dialInMemory(t, testMCPServer(t, db, fx), nil)
+	// render static: the shell would otherwise escalate to the rod browser,
+	// whose fetches carry neither profile headers nor cookies.
+	out := decodeOut(t, callTool(t, cs, "scrape_url", map[string]any{
+		"url": srv.URL, "render": "static", "include": []any{"article"}, "cookies": "a=b",
+	}, ""))
+	md, _ := out["markdown"].(string)
+	if !strings.Contains(md, "Scoped From MCP") || strings.Contains(md, "nav-marker-text") {
+		t.Errorf("include scoping failed via MCP:\n%s", md)
+	}
+	if gotCookie != "a=b" {
+		t.Errorf("origin saw Cookie %q, want a=b", gotCookie)
+	}
+}
+
+func TestScrapeURL_QualityError(t *testing.T) {
+	raw, err := os.ReadFile("../testdata/quality/challenge-akamai.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write(raw) //nolint:errcheck // httptest local; short write unactionable
+	}))
+	t.Cleanup(srv.Close)
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openMCPDB(t)
+	cs := dialInMemory(t, testMCPServer(t, db, fx), nil)
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "scrape_url", Arguments: map[string]any{"url": srv.URL},
+	})
+	if err != nil {
+		t.Fatalf("transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("403 challenge via MCP: want tool error, got %+v", res.StructuredContent)
+	}
+}

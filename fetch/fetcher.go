@@ -10,6 +10,8 @@ import (
 type FetchRequest struct {
 	URL     string
 	Timeout time.Duration // per-attempt budget; 0 = 20s default
+	Profile string        // header profile: default|chrome|firefox (unknown = default)
+	Cookies string        // raw Cookie header value, passed through verbatim
 }
 
 // FetchResponse is the fetched page.

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"time"
 
 	"golang.org/x/net/publicsuffix"
@@ -59,17 +60,47 @@ func NewStaticFetcher() (*StaticFetcher, error) {
 	return &StaticFetcher{client: client, ua: defaultHeaders["User-Agent"]}, nil
 }
 
+// homepageOf returns scheme://host/ for warmup, or "" for non-http URLs.
+func homepageOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + "/"
+}
+
 // CanHandle is always true for the static fetcher.
 func (s *StaticFetcher) CanHandle(req FetchRequest) bool { return true }
 
 // Close is a no-op (no persistent resources).
 func (s *StaticFetcher) Close() error { return nil }
 
-// Fetch performs one GET with a per-attempt timeout budget.
+// Fetch performs one GET with a per-attempt timeout budget. On a
+// challenge-classified response with a non-empty profile, it warms the
+// cookie jar with one homepage GET then retries the original URL exactly
+// once, returning whatever arrives (success or final failure — no loops).
 func (s *StaticFetcher) Fetch(ctx context.Context, req FetchRequest) (*FetchResponse, error) {
 	if req.URL == "" {
 		return nil, fmt.Errorf("fetch: empty URL")
 	}
+	resp, err := s.do(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if req.Profile == "" || !IsChallengePage(resp.HTML, resp.Headers, resp.StatusCode) {
+		return resp, nil
+	}
+	if home := homepageOf(req.URL); home != "" {
+		_, _ = s.do(ctx, FetchRequest{URL: home, Timeout: req.Timeout, Profile: req.Profile}) //nolint:errcheck // warmup best-effort; retry proceeds regardless
+	}
+	retry, rerr := s.do(ctx, req)
+	if rerr != nil {
+		return nil, rerr
+	}
+	return retry, nil
+}
+
+func (s *StaticFetcher) do(ctx context.Context, req FetchRequest) (*FetchResponse, error) {
 	timeout := budget(req)
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -77,8 +108,11 @@ func (s *StaticFetcher) Fetch(ctx context.Context, req FetchRequest) (*FetchResp
 	if err != nil {
 		return nil, fmt.Errorf("fetch: %w", err)
 	}
-	for k, v := range defaultHeaders {
+	for k, v := range profileHeaders(req.Profile) {
 		hreq.Header.Set(k, v)
+	}
+	if req.Cookies != "" {
+		hreq.Header.Set("Cookie", req.Cookies)
 	}
 	resp, err := s.client.Do(hreq)
 	if err != nil {
