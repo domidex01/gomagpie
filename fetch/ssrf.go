@@ -112,7 +112,7 @@ func blockedHost(host string) bool {
 // private/loopback/link-local/multicast/unspecified. Explicit membership
 // checks (not IsGlobalUnicast alone — its link-local handling differs
 // between net.IP and netip) so cloud metadata (169.254.169.254) is always
-// rejected.
+// rejected. Phase E's transport swap must key on this same predicate.
 func isPublicIP(a netip.Addr) bool {
 	if !a.IsValid() || a.IsLoopback() || a.IsPrivate() || a.IsUnspecified() ||
 		a.IsMulticast() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() {
@@ -120,10 +120,6 @@ func isPublicIP(a netip.Addr) bool {
 	}
 	return true
 }
-
-// IsPublicIP is the exported predicate (Phase E's transport swap and the
-// dial-peer check both key on it); exposed for hermetic unit testing.
-func IsPublicIP(a netip.Addr) bool { return isPublicIP(a) }
 
 // isTestBinary reports whether we're running under `go test`. The hatch:
 // test binaries auto-relax private-net + file checks so the existing

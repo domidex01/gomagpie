@@ -79,7 +79,7 @@ type crawlCLIOptions struct {
 	Provider     string
 	Model        string
 	ExporterCmd  string
-	// Scope bounds; globs validated pre-I/O via the same CompileScope Run uses.
+	// Scope bounds; validated inside crawl.Run pre-I/O (ErrBadScope → exit 2).
 	PathPrefix      string
 	Include         []string
 	Exclude         []string
@@ -91,10 +91,6 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	cfg, err := resolveConfig()
 	if err != nil {
 		return err
-	}
-	// Scope globs fail before any I/O (same pure function crawl.Run uses).
-	if _, err := crawl.CompileScope(o.SameHost, o.AllowSubdomains, o.PathPrefix, o.Include, o.Exclude); err != nil {
-		return fail(2, "%v", err)
 	}
 	if o.Schema != "" {
 		cfg.Schema = o.Schema
@@ -233,6 +229,8 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 			return fail(5, "crawl: %v", err)
 		case errors.Is(err, crawl.ErrCostCeiling):
 			return fail(6, "crawl: %v", err)
+		case errors.Is(err, crawl.ErrBadScope):
+			return fail(2, "%v", err)
 		case errors.Is(err, fetch.ErrPrivateAddress):
 			return fail(2, "crawl: %v", err)
 		}

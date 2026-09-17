@@ -44,3 +44,40 @@ func TestDialPeerAllowed(t *testing.T) {
 		t.Error("::ffff:127.0.0.1 classified public")
 	}
 }
+
+// TestIsPublicIP_Table pins the exported IP predicate: the dial-peer
+// check and DNS validation both key on it. The peerOK glue (RemoteAddr →
+// predicate) in guardedTransport stays review-covered — the one honest
+// gap per phase-D-tests §8 (a hermetic rebind of the live dialer would
+// need a fake DNS server, i.e. a new dependency).
+func TestIsPublicIP_Table(t *testing.T) {
+	cases := []struct {
+		ip   string
+		want bool
+	}{
+		{"93.184.216.34", true},
+		{"1.1.1.1", true},
+		{"2606:4700:4700::1111", true},
+		{"127.0.0.1", false},
+		{"::1", false},
+		{"10.0.0.1", false},
+		{"172.16.0.1", false},
+		{"192.168.1.1", false},
+		{"169.254.169.254", false},
+		{"fe80::1", false},
+		{"224.0.0.1", false},
+		{"ff02::1", false},
+		{"0.0.0.0", false},
+		{"::ffff:127.0.0.1", false}, // 4-in-6 mapped loopback must not slip through
+		{"::ffff:8.8.8.8", true},
+	}
+	for _, tc := range cases {
+		a, err := netip.ParseAddr(tc.ip)
+		if err != nil {
+			t.Fatalf("parse %s: %v", tc.ip, err)
+		}
+		if got := isPublicIP(a); got != tc.want {
+			t.Errorf("IsPublicIP(%s) = %v, want %v", tc.ip, got, tc.want)
+		}
+	}
+}

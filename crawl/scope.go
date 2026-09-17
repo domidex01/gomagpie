@@ -1,12 +1,17 @@
 package crawl
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
 	"regexp"
 	"strings"
 )
+
+// ErrBadScope marks invalid scope configuration (glob cap/compile
+// failures). Run fails pre-I/O with it; the CLI maps it to exit 2.
+var ErrBadScope = errors.New("crawl: bad scope")
 
 // Scope is the compiled crawl frontier filter: host rule → path prefix →
 // include globs → exclude globs (exclude wins). Built once per run by
@@ -33,7 +38,7 @@ func CompileScope(sameHost, allowSubdomains bool, pathPrefix string, include, ex
 		for _, g := range globs {
 			re, err := compileGlob(g)
 			if err != nil {
-				return nil, fmt.Errorf("crawl: %s glob: %w", what, err)
+				return nil, fmt.Errorf("%w: %s glob: %v", ErrBadScope, what, err)
 			}
 			out = append(out, re)
 		}
