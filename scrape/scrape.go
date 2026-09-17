@@ -20,6 +20,7 @@ import (
 	"gomagpie/fetch"
 	"gomagpie/selector"
 	"gomagpie/store"
+	"gomagpie/vertical"
 )
 
 // ErrMissingKey marks a schema extraction without credentials (CLI maps to exit 7).
@@ -31,6 +32,9 @@ type Deps struct {
 	DB           *store.DB
 	ExtractorFor func(provider, key, model string, sch *extract.Schema, runID string) (extract.Extractor, error)
 	APIKeyFor    func(provider string) string
+	// Fetcher serves raw-URL fetches and vertical sub-fetches; nil =
+	// NewStaticFetcher() (production default; tests inject a fake).
+	Fetcher vertical.Fetcher
 }
 
 // Options configures one scrape. A nil Schema means markdown-only (no LLM).
@@ -45,6 +49,10 @@ type Options struct {
 	Scope      clean.Scope
 	Profile    string
 	Cookies    string
+	// Vertical selects a zero-LLM typed extractor: "" (default) = off,
+	// "auto" = strict auto-dispatch, or an extractor name for explicit
+	// selection. Explicit selection with a schema ignores the schema.
+	Vertical string
 }
 
 // Result is one scraped page.
@@ -61,6 +69,8 @@ type Result struct {
 	Provider       string
 	Model          string
 	Rendered       string
+	// Vertical names the extractor that produced Record ("" when unused).
+	Vertical string `json:",omitempty"`
 }
 
 // Run fetches, cleans, and optionally extracts one URL.
@@ -83,6 +93,12 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	default:
 		return Result{}, fmt.Errorf("scrape: page format %q must be markdown|llm|text|json", o.PageFormat)
 	}
+	// Unknown vertical names fail before any I/O, like a bogus page format.
+	if o.Vertical != "" && o.Vertical != "auto" {
+		if _, ok := vertical.Lookup(o.Vertical); !ok {
+			return Result{}, fmt.Errorf("scrape: vertical %q unknown (see `magpie vertical --list`)", o.Vertical)
+		}
+	}
 
 	runID := uuidNew()
 	if err := d.DB.BeginRun(runID, "scrape"); err != nil {
@@ -94,12 +110,16 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		}
 	}
 
-	static, err := fetch.NewStaticFetcher()
-	if err != nil {
-		finish(0, 1, "error")
-		return Result{}, err
+	var vf = d.Fetcher
+	if vf == nil {
+		static, serr := fetch.NewStaticFetcher()
+		if serr != nil {
+			finish(0, 1, "error")
+			return Result{}, serr
+		}
+		vf = static
 	}
-	page, err := fetchURL(ctx, static, rawURL, render, o.Profile, o.Cookies)
+	page, err := fetchURL(ctx, vf, rawURL, render, o.Profile, o.Cookies)
 	if err != nil {
 		finish(0, 1, "error")
 		return Result{}, err
@@ -125,6 +145,22 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		return Result{}, rerr
 	}
 	base.Rendered = rendered
+
+	if o.Vertical != "" && o.Vertical != "auto" {
+		// Validated pre-I/O above; Lookup cannot fail here.
+		ex, _ := vertical.Lookup(o.Vertical)
+		// ^ --list ships in Phase C; the message names it anyway so the string never changes.
+		if u, err := url.Parse(rawURL); err != nil || !ex.Match(u) {
+			finish(0, 1, "error")
+			return Result{}, fmt.Errorf("scrape: vertical %q: %w for %s", o.Vertical, vertical.ErrURLMismatch, rawURL)
+		}
+		return runVertical(ctx, vf, rawURL, ex, base, finish)
+	}
+	if o.Vertical == "auto" {
+		if ex, ok := vertical.MatchURL(rawURL); ok {
+			return runVertical(ctx, vf, rawURL, ex, base, finish)
+		}
+	}
 
 	// No schema → markdown only, no LLM.
 	if o.Schema == nil {
@@ -181,13 +217,35 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	return base, nil
 }
 
-func fetchURL(ctx context.Context, static *fetch.StaticFetcher, rawURL, render, profile, cookies string) (*fetch.FetchResponse, error) {
+// runVertical runs one zero-LLM extractor: default headers only (profiles
+// exist for challenge-prone HTML pages, not registry APIs), no selector
+// cache interaction (vertical output isn't selector-derived; caching it
+// would poison schema-keyed lookups), no LLM. Extractor errors are hard
+// errors — never a silent LLM fallback.
+func runVertical(ctx context.Context, vf vertical.Fetcher, rawURL string, ex vertical.Extractor, base Result, finish func(ok, er int, status string)) (Result, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		finish(0, 1, "error")
+		return Result{}, fmt.Errorf("scrape: vertical %s: %w", ex.Info.Name, err)
+	}
+	m, err := ex.Extract(ctx, vf, u)
+	if err != nil {
+		finish(0, 1, "error")
+		return Result{}, err
+	}
+	finish(1, 0, "finished")
+	base.Record = m
+	base.Vertical = ex.Info.Name
+	return base, nil
+}
+
+func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render, profile, cookies string) (*fetch.FetchResponse, error) {
 	if render == "browser" {
 		return fetchBrowser(ctx, rawURL)
 	}
 	// A4 pass-through: every status reaches Clean+Classify so blocked pages
 	// get typed quality errors instead of "fetch: HTTP %d".
-	resp, err := static.Fetch(ctx, fetch.FetchRequest{URL: rawURL, Profile: profile, Cookies: cookies})
+	resp, err := vf.Fetch(ctx, fetch.FetchRequest{URL: rawURL, Profile: profile, Cookies: cookies})
 	if err != nil {
 		return nil, err
 	}

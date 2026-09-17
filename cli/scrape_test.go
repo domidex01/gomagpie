@@ -363,3 +363,38 @@ func TestScrape_ScopeAndProfileFlags(t *testing.T) {
 		t.Fatalf("scrape: %v", err)
 	}
 }
+
+func TestScrape_VerticalUnknown(t *testing.T) {
+	testEnv(t, "cache.db")
+	// Nonexistent file: a fetch attempt would exit 1, so exit 2 proves
+	// unknown-name validation runs pre-I/O.
+	err := runScrape(t.Context(), "file:///nonexistent-vertical-probe.html", scrapeOptions{Format: "json", Render: "static", Vertical: "tumblr"})
+	if codeOf(err) != 2 {
+		t.Fatalf("exit = %d, want 2 (err=%v)", codeOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "tumblr") {
+		t.Errorf("error = %v, want name", err)
+	}
+}
+
+func TestScrape_VerticalMismatch(t *testing.T) {
+	testEnv(t, "cache.db")
+	abs := mustAbs(t, "../testdata/clean/article.html")
+	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{Format: "json", Render: "static", Vertical: "reddit"})
+	if codeOf(err) != 2 {
+		t.Fatalf("exit = %d, want 2 (err=%v)", codeOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "does not handle") {
+		t.Errorf("error = %v, want 'does not handle'", err)
+	}
+}
+
+func TestScrape_VerticalHelp(t *testing.T) {
+	usage := newScrapeCmd().UsageString()
+	if !strings.Contains(usage, "auto") {
+		t.Errorf("scrape usage lacks 'auto':\n%s", usage)
+	}
+	if !strings.Contains(usage, "default off") {
+		t.Errorf("scrape usage lacks default-off note:\n%s", usage)
+	}
+}

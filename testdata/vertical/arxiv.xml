@@ -1,0 +1,21 @@
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns:future="http://example.com/future">
+<title>ArXiv Query</title>
+<id>http://arxiv.org/api/query</id>
+<entry>
+<id>http://arxiv.org/abs/2401.12345v2</id>
+<title>Demo Paper on Testing Things</title>
+<summary>This is the abstract summary of the demo paper for fixture purposes.</summary>
+<published>2024-01-15T00:00:00Z</published>
+<author><name>A. One</name></author>
+<author><name>B. Two</name></author>
+<arxiv:comment>5 pages</arxiv:comment>
+<future:tag>future_field_xyz</future:tag>
+</entry>
+<entry>
+<id>http://arxiv.org/abs/2401.99999v1</id>
+<title>Second Paper Ignored</title>
+<summary>Must be ignored; first entry wins.</summary>
+<published>2024-01-16T00:00:00Z</published>
+<author><name>C. Three</name></author>
+</entry>
+</feed>
