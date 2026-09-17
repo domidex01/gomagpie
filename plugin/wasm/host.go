@@ -132,6 +132,12 @@ type callState struct {
 // stored via gomagpie_set_output. run returning 0 without set_output is a
 // guest bug and errors loudly.
 func (r *Runner) Transform(ctx context.Context, input []byte) ([]byte, error) {
+	// Fail fast on an already-dead context: without this, a microsecond
+	// guest can run to success before the runtime notices cancellation,
+	// making canceled-context behavior a coin flip.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("wasm: transform: %w", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

@@ -1,0 +1,1 @@
+{"future_field_xyz":{"note":"blob"},"info":{"author":"Jane Doe","home_page":"https://example.com/demo","name":"demo-pkg","requires_python":">=3.9","summary":"A demo package for testing purposes here","version":"1.2.3"},"vulnerabilities":[{"id":"x"}]}

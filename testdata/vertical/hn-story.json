@@ -1,0 +1,1 @@
+{"author":"hnuser","children":[{"author":"c1","children":[{"author":"gc","children":[],"id":11,"text":"nested"}],"id":1,"text":"first"},{"author":"c2","children":[],"id":2,"text":"second"}],"future_field_xyz":{"a":1},"highlightResult":{"title":{"value":"Demo"}},"id":12345,"points":256,"text":null,"title":"Demo HN story","url":"https://example.com/demo"}

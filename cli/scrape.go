@@ -11,6 +11,7 @@ import (
 	"gomagpie/extract"
 	"gomagpie/scrape"
 	"gomagpie/store"
+	"gomagpie/vertical"
 
 	"github.com/spf13/cobra"
 )
@@ -21,6 +22,7 @@ func newScrapeCmd() *cobra.Command {
 	var pageFormat, headerProfile, cookies string
 	var include, exclude []string
 	var onlyMainContent bool
+	var verticalName string
 	cmd := &cobra.Command{
 		Use:   "scrape <url>",
 		Short: "Fetch → clean → extract a single URL",
@@ -31,6 +33,7 @@ func newScrapeCmd() *cobra.Command {
 				Out: out, Format: format, NoCache: noCache,
 				PageFormat: pageFormat, Include: include, Exclude: exclude,
 				OnlyMainContent: onlyMainContent, HeaderProfile: headerProfile, Cookies: cookies,
+				Vertical: verticalName,
 			})
 		},
 	}
@@ -47,6 +50,7 @@ func newScrapeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&onlyMainContent, "only-main-content", false, "main-content only (trafilatura already does this)")
 	cmd.Flags().StringVar(&headerProfile, "header-profile", "", "request header bundle: default|chrome|firefox")
 	cmd.Flags().StringVar(&cookies, "cookies", "", "raw Cookie header value, e.g. \"a=b; c=d\"")
+	cmd.Flags().StringVar(&verticalName, "vertical", "", "zero-LLM typed extractor: auto or a name (default off; `magpie vertical --list` in Phase C)")
 	return cmd
 }
 
@@ -66,6 +70,8 @@ type scrapeOptions struct {
 	OnlyMainContent bool
 	HeaderProfile   string
 	Cookies         string
+	// Vertical is flag-only (auto|name, default off): validated pre-I/O.
+	Vertical string
 }
 
 func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
@@ -97,6 +103,12 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		case "markdown", "llm", "text", "json":
 		default:
 			return fail(2, "page-format %q must be markdown|llm|text|json", o.PageFormat)
+		}
+	}
+	// Unknown vertical names fail pre-I/O: no fetch, no DB touched beyond open.
+	if o.Vertical != "" && o.Vertical != "auto" {
+		if _, ok := vertical.Lookup(o.Vertical); !ok {
+			return fail(2, "vertical %q unknown (see `magpie vertical --list`)", o.Vertical)
 		}
 	}
 
@@ -135,6 +147,7 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		PageFormat: o.PageFormat,
 		Scope:      clean.Scope{Include: o.Include, Exclude: o.Exclude, OnlyMainContent: o.OnlyMainContent},
 		Profile:    o.HeaderProfile, Cookies: o.Cookies,
+		Vertical: o.Vertical,
 	})
 	if err != nil {
 		switch {
@@ -144,8 +157,17 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 			return fail(6, "cost ceiling exceeded: %v", err)
 		case errors.Is(err, clean.ErrQuality):
 			return fail(8, "%s", qualityMessage(err, rawURL))
+		case errors.Is(err, vertical.ErrURLMismatch):
+			return fail(2, "%s", err.Error())
 		}
 		return err
+	}
+	if res.Vertical != "" {
+		vdoc, merr := verticalDoc(res)
+		if merr != nil {
+			return merr
+		}
+		return writeOut(cfg.Out, vdoc)
 	}
 	if sch == nil {
 		if o.PageFormat == "json" {
@@ -222,6 +244,18 @@ func extractedDoc(r scrape.Result) (string, error) {
 		}
 	}
 	return marshalOut(out, "scrape")
+}
+
+// verticalDoc renders a zero-LLM vertical hit: the typed record plus the
+// extractor name, no LLM usage block (nothing was billed).
+func verticalDoc(r scrape.Result) (string, error) {
+	return marshalOut(struct {
+		URL      string         `json:"url"`
+		FinalURL string         `json:"final_url"`
+		Title    string         `json:"title"`
+		Vertical string         `json:"vertical"`
+		Record   map[string]any `json:"record"`
+	}{r.URL, r.FinalURL, r.Title, r.Vertical, r.Record}, "scrape")
 }
 
 func orEmpty(r json.RawMessage) json.RawMessage {

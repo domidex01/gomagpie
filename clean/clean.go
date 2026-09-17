@@ -54,6 +54,17 @@ func Clean(ctx context.Context, raw RawPage) (CleanedPage, error) {
 		return CleanedPage{}, fmt.Errorf("clean: %w", err)
 	}
 	md = capTokens(md, MaxTokens)
+	// Phase B rescue: thin unscoped pages gain island/player text. Scoped
+	// and rich pages are provably untouched (guard mirrors Classify's
+	// thin-page philosophy).
+	if len(raw.Scope.Include)+len(raw.Scope.Exclude) == 0 && WordCount(md) < 200 {
+		if extra := IslandText(sidecar, 4000); WordCount(md+"\n"+extra) > WordCount(md) {
+			md += "\n\n" + extra
+		}
+		if pd := PlayerDetails(raw.HTML); pd != nil && isYouTubeHost(raw.FinalURL) {
+			md = "# " + pd["title"] + "\n" + pd["author"] + "\n\n" + pd["description"] + "\n\n" + md
+		}
+	}
 	meta := HarvestMetadata(raw.HTML, raw.FinalURL, md)
 	out := CleanedPage{
 		Markdown:       md,
