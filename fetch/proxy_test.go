@@ -1,6 +1,6 @@
 package fetch_test
 
-// Proxy tests: GOMAGPIE_PROXY honored (hit), NO_PROXY bypass, invalid
+// Proxy tests: MAGPIE_PROXY honored (hit), NO_PROXY bypass, invalid
 // value loud, robots Checker rides the same guarded transport. All env
 // via t.Setenv (parallel-safe, auto-restore).
 
@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gomagpie/crawl"
-	"gomagpie/fetch"
+	"magpie/crawl"
+	"magpie/fetch"
 )
 
 // newClosedPort returns a 127.0.0.1 host:port that reliably refuses
@@ -65,7 +65,7 @@ func TestProxy_Hit(t *testing.T) {
 		_, _ = w.Write([]byte("via proxy")) //nolint:errcheck // test server
 	})
 	proxyURL := newProxyOrigin(t, &proxyHits, origin.URL)
-	t.Setenv("GOMAGPIE_PROXY", proxyURL)
+	t.Setenv("MAGPIE_PROXY", proxyURL)
 
 	f := relaxedFetcher(t)
 	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: origin.URL + "/x"})
@@ -89,7 +89,7 @@ func TestProxy_NoProxyBypass(t *testing.T) {
 		_, _ = w.Write([]byte("direct")) //nolint:errcheck // test server
 	})
 	proxyURL := newProxyOrigin(t, &proxyHits, origin.URL)
-	t.Setenv("GOMAGPIE_PROXY", proxyURL)
+	t.Setenv("MAGPIE_PROXY", proxyURL)
 	// Hostname WITHOUT port: noProxyMatch keys on u.Hostname().
 	t.Setenv("NO_PROXY", "127.0.0.1")
 
@@ -111,21 +111,21 @@ func TestProxy_InvalidValue(t *testing.T) {
 	origin := hitOrigin(t, &originHits, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("should never be served")) //nolint:errcheck // test server
 	})
-	t.Setenv("GOMAGPIE_PROXY", "://bogus")
+	t.Setenv("MAGPIE_PROXY", "://bogus")
 
 	f := relaxedFetcher(t)
 	_, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: origin.URL + "/x"})
-	if err == nil || !strings.Contains(err.Error(), "GOMAGPIE_PROXY") {
-		t.Fatalf("err = %v, want loud failure naming GOMAGPIE_PROXY", err)
+	if err == nil || !strings.Contains(err.Error(), "MAGPIE_PROXY") {
+		t.Fatalf("err = %v, want loud failure naming MAGPIE_PROXY", err)
 	}
 	if n := originHits.Load(); n != 0 {
 		t.Errorf("origin hits = %d, want 0 (garbage proxy config must not reach the origin)", n)
 	}
 	// Sentinel-shaped configs fail too: wrong scheme, no host.
 	for _, bad := range []string{"ftp://p.example:3128", "http://"} {
-		t.Setenv("GOMAGPIE_PROXY", bad)
-		if _, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: origin.URL + "/x"}); err == nil || !strings.Contains(err.Error(), "GOMAGPIE_PROXY") {
-			t.Errorf("GOMAGPIE_PROXY=%q: err = %v, want loud failure", bad, err)
+		t.Setenv("MAGPIE_PROXY", bad)
+		if _, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: origin.URL + "/x"}); err == nil || !strings.Contains(err.Error(), "MAGPIE_PROXY") {
+			t.Errorf("MAGPIE_PROXY=%q: err = %v, want loud failure", bad, err)
 		}
 	}
 }
@@ -139,7 +139,7 @@ func TestProxy_RobotsViaProxy(t *testing.T) {
 	origin := httptest.NewServer(mux)
 	t.Cleanup(origin.Close)
 	proxyURL := newProxyOrigin(t, &proxyHits, origin.URL)
-	t.Setenv("GOMAGPIE_PROXY", proxyURL)
+	t.Setenv("MAGPIE_PROXY", proxyURL)
 
 	// The Checker shares GuardedTransport → robots fetches honor the proxy.
 	c := crawl.NewChecker()
@@ -153,7 +153,7 @@ func TestProxy_RobotsViaProxy(t *testing.T) {
 }
 
 // TestProxy_DialGuardSkipsProxyPeer is the regression test for the
-// proxyconnect bug: with GOMAGPIE_PROXY set, the dial peer IS the
+// proxyconnect bug: with MAGPIE_PROXY set, the dial peer IS the
 // operator-configured proxy (trusted egress, often localhost) — the
 // guard must reject TARGETS (ValidateURL pre-dial), never the proxy
 // itself. Strict options throughout: no test-binary relaxation involved.
@@ -165,7 +165,7 @@ func TestProxy_DialGuardSkipsProxyPeer(t *testing.T) {
 		_, _ = w.Write([]byte("never")) //nolint:errcheck // test server
 	})
 	proxyURL := newProxyOrigin(t, &proxyHits, origin.URL)
-	t.Setenv("GOMAGPIE_PROXY", proxyURL)
+	t.Setenv("MAGPIE_PROXY", proxyURL)
 
 	f, err := fetch.NewStaticFetcherWithOptions(fetch.SSRFOptions{}) // STRICT
 	if err != nil {
@@ -202,9 +202,9 @@ func TestProxy_PoolFailover(t *testing.T) {
 	if err := os.WriteFile(poolFile, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GOMAGPIE_PROXY", "")
-	t.Setenv("GOMAGPIE_PROXY_FILE", poolFile)
-	t.Setenv("GOMAGPIE_PROXY_STRATEGY", "")
+	t.Setenv("MAGPIE_PROXY", "")
+	t.Setenv("MAGPIE_PROXY_FILE", poolFile)
+	t.Setenv("MAGPIE_PROXY_STRATEGY", "")
 	t.Setenv("NO_PROXY", "")
 
 	f := relaxedFetcher(t)
@@ -246,9 +246,9 @@ func TestProxy_Pool4xxNotEgress(t *testing.T) {
 	if err := os.WriteFile(poolFile, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GOMAGPIE_PROXY", "")
-	t.Setenv("GOMAGPIE_PROXY_FILE", poolFile)
-	t.Setenv("GOMAGPIE_PROXY_STRATEGY", "")
+	t.Setenv("MAGPIE_PROXY", "")
+	t.Setenv("MAGPIE_PROXY_FILE", poolFile)
+	t.Setenv("MAGPIE_PROXY_STRATEGY", "")
 	t.Setenv("NO_PROXY", "")
 
 	f := relaxedFetcher(t)
@@ -279,9 +279,9 @@ func TestProxy_PoolNoProxyBypass(t *testing.T) {
 	if err := os.WriteFile(poolFile, []byte("http://"+proxyURLhost(proxyURL)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GOMAGPIE_PROXY", "")
-	t.Setenv("GOMAGPIE_PROXY_FILE", poolFile)
-	t.Setenv("GOMAGPIE_PROXY_STRATEGY", "")
+	t.Setenv("MAGPIE_PROXY", "")
+	t.Setenv("MAGPIE_PROXY_FILE", poolFile)
+	t.Setenv("MAGPIE_PROXY_STRATEGY", "")
 	t.Setenv("NO_PROXY", "127.0.0.1")
 
 	f := relaxedFetcher(t)

@@ -1,4 +1,4 @@
-# Go rules — gomagpie (`magpie`)
+# Go rules — magpie (`magpie`)
 
 - Go 1.26+ required (go-trafilatura v2). Toolchain: `go build`, `go test`, `go vet`,
   `gofmt`, `golangci-lint` (see `.golangci.yml`).
@@ -14,7 +14,7 @@
   backoff, grobotstxt, bloom, mcp go-sdk, wazero, modernc sqlite, impersonate-http/utls,
   klauspost/brotli, ledongthuc/pdf.
 - **Layering — dependency arrows point one way, surface → orchestration → stages → leaves.**
-  Leaves `clean extract store config plugin` import no gomagpie packages (keep portable:
+  Leaves `clean extract store config plugin` import no magpie packages (keep portable:
   the GUI port depends on it). Orchestration (`crawl`, `scrape` via its `Deps` seam) may
   import stages; `mcp` and `cli` are surfaces that import inward; only `build` (codegen)
   and `cmd` import `cli`; nothing imports `mcp`. rod is imported only inside `fetch/`,

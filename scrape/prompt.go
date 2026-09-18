@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"gomagpie/extract"
-	"gomagpie/store"
+	"magpie/extract"
+	"magpie/store"
 )
 
 // AutoProviderOrder is the documented `--provider auto` priority: keyed

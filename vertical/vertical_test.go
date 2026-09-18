@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"gomagpie/fetch"
-	"gomagpie/vertical"
+	"magpie/fetch"
+	"magpie/vertical"
 )
 
 // fakeVerticalFetcher serves fixture bytes by URL substring; zero network.
@@ -93,6 +93,9 @@ func TestList_ExactNameSet(t *testing.T) {
 		"github_repo": true, "pypi": true, "npm": true, "crates_io": true,
 		"reddit": true, "hackernews": true, "arxiv": true, "youtube": true,
 		"shopify_product": true, "ecommerce_product": true,
+		// Phase H additions.
+		"stackoverflow": true, "trustpilot": true, "dockerhub": true,
+		"huggingface": true, "og": true,
 	}
 	got := map[string]bool{}
 	for _, info := range vertical.List() {
@@ -261,7 +264,7 @@ func TestStaticFetcher_UserAgent(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if observed != "magpie/1.0 (+https://github.com/you/gomagpie)" {
+	if observed != "magpie/1.0 (+https://github.com/you/magpie)" {
 		t.Errorf("User-Agent = %q, want magpie UA", observed)
 	}
 }

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"gomagpie/extract"
+	"magpie/extract"
 )
 
 type fakeProvider struct {
@@ -203,7 +203,7 @@ func TestSchemaErrorText(t *testing.T) {
 }
 
 func TestUnknownCoerce(t *testing.T) {
-	_, err := extract.ParseSchema([]byte(`{"type":"object","properties":{"a":{"type":"string","x-gomagpie":{"coerce":"frobnicate"}}}}`))
+	_, err := extract.ParseSchema([]byte(`{"type":"object","properties":{"a":{"type":"string","x-magpie":{"coerce":"frobnicate"}}}}`))
 	if err == nil || !strings.Contains(err.Error(), "frobnicate") {
 		t.Fatalf("expected unknown-coerce error, got %v", err)
 	}
@@ -493,7 +493,7 @@ func TestOpenRouter_RequireParametersAndCost(t *testing.T) {
 	var logs []logCall
 	ex := extract.NewOpenAI(srv.URL, "k", "anthropic/claude-sonnet-4-6", mustLoadSchema(t, "../testdata/extract/price.yaml"))
 	ex.Provider = "openrouter"
-	ex.ExtraHeaders = map[string]string{"HTTP-Referer": "https://github.com/you/gomagpie", "X-Title": "magpie"}
+	ex.ExtraHeaders = map[string]string{"HTTP-Referer": "https://github.com/you/magpie", "X-Title": "magpie"}
 	ex.BodyExtra = map[string]any{"provider": map[string]any{"require_parameters": true}}
 	ex.Log = captureLog(&logs)
 	if _, err := ex.Extract(t.Context(), extract.ExtractInput{Markdown: "# Widget"}); err != nil {

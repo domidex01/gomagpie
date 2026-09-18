@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gomagpie/fetch"
+	"magpie/fetch"
 )
 
 // ErrNoMatch marks a URL no strict extractor handles (auto-dispatch miss).
@@ -177,6 +177,12 @@ func firstJSONArray(body []byte) (map[string]any, error) {
 		return nil, fmt.Errorf("vertical: array element not an object")
 	}
 	return m, nil
+}
+
+// anyMap type-asserts a decoded JSON value to an object (nil when not).
+func anyMap(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
 }
 
 // hostIs folds the URL host for canonical-host checks.

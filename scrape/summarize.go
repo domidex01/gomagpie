@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"gomagpie/extract"
+	"magpie/extract"
 )
 
 // MaxSummarizeInputWords caps the markdown fed to the prompt (cost bound).

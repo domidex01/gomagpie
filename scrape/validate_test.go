@@ -2,6 +2,7 @@ package scrape
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -79,5 +80,79 @@ func TestRunNilDBStillFirst(t *testing.T) {
 	_, err := Run(t.Context(), Deps{}, "https://example.com", Options{Render: "nope"})
 	if err == nil || err.Error() != "scrape: nil DB" {
 		t.Fatalf("want nil-DB error, got %v", err)
+	}
+}
+
+// --- Phase H: actions + lang validation (append-only rows). ---
+
+func TestValidateOptions_Actions(t *testing.T) {
+	t.Run("actions with static rejected", func(t *testing.T) {
+		err := ValidateOptions(Options{Actions: []string{"click #x"}, Render: "static"})
+		var oe *OptionsError
+		if !errors.As(err, &oe) {
+			t.Fatalf("err = %v, want *OptionsError", err)
+		}
+		for _, want := range []string{"actions", "static"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("err %q missing %q", err, want)
+			}
+		}
+	})
+	t.Run("actions with auto and browser pass", func(t *testing.T) {
+		for _, render := range []string{"", "auto", "browser"} {
+			if err := ValidateOptions(Options{Actions: []string{"click #x", "wait 30000"}, Render: render}); err != nil {
+				t.Errorf("render %q: %v", render, err)
+			}
+		}
+	})
+	t.Run("malformed DSL surfaces pre-I/O with verb and line", func(t *testing.T) {
+		err := ValidateOptions(Options{Actions: []string{"click #ok", "frobnicate #x"}})
+		var oe *OptionsError
+		if !errors.As(err, &oe) {
+			t.Fatalf("err = %v, want *OptionsError (from ValidateOptions, not the rod path)", err)
+		}
+		for _, want := range []string{"line 2", "frobnicate"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("err %q missing %q", err, want)
+			}
+		}
+	})
+	t.Run("wait cap surfaces as OptionsError", func(t *testing.T) {
+		if err := ValidateOptions(Options{Actions: []string{"wait 99999"}}); err == nil || !strings.Contains(err.Error(), "30000") {
+			t.Errorf("err = %v, want the 30000 ms cap named", err)
+		}
+	})
+	t.Run("screenshot format plus actions pass", func(t *testing.T) {
+		// One browser session: actions run, then the capture (final step).
+		if err := ValidateOptions(Options{PageFormat: "screenshot", Actions: []string{"click #consent"}}); err != nil {
+			t.Errorf("screenshot+actions: %v", err)
+		}
+	})
+}
+
+// TestValidateOptions_LangControlChars — H.7 gate test 2: the lang value
+// crosses into a raw HTTP header, so a CRLF there is header injection.
+// Rejected pre-I/O (zero bytes on the wire), message names the rule.
+func TestValidateOptions_LangControlChars(t *testing.T) {
+	err := ValidateOptions(Options{Lang: "en\r\nX-Evil: 1"})
+	var oe *OptionsError
+	if !errors.As(err, &oe) {
+		t.Fatalf("err = %v, want *OptionsError", err)
+	}
+	for _, want := range []string{"lang", "control characters"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err %q missing %q", err, want)
+		}
+	}
+	// BCP47-realistic values must never be rejected (passthrough, no
+	// grammar policing).
+	for _, ok := range []string{"en", "fr-CA,fr;q=0.9", "en-US,en;q=0.9,es;q=0.8"} {
+		if err := ValidateOptions(Options{Lang: ok}); err != nil {
+			t.Errorf("lang %q: %v", ok, err)
+		}
+	}
+	// Same check alongside other options (profile + lang is a common combo).
+	if err := ValidateOptions(Options{Profile: "chrome", Lang: "fr-CA,fr;q=0.9"}); err != nil {
+		t.Errorf("profile+lang: %v", err)
 	}
 }

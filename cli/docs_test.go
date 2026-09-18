@@ -13,7 +13,7 @@ func TestDocs_Phase3Surface(t *testing.T) {
 	}
 	for _, want := range []string{
 		"scrape_url", "crawl_site", "extract_structured", "get_cached_selectors",
-		"magpie serve", "magpie build --with", "gomagpie_api_version",
+		"magpie serve", "magpie build --with", "magpie_api_version",
 	} {
 		if !strings.Contains(string(readme), want) {
 			t.Errorf("README.md does not mention %q", want)

@@ -14,7 +14,7 @@ func TestBuild_MainGolden_Zero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderMain: %v", err)
 	}
-	want := "package main\n\nimport (\n\t\"gomagpie/cli\"\n\t\"os\"\n)\n\nfunc main() {\n\tos.Exit(cli.Execute())\n}\n"
+	want := "package main\n\nimport (\n\t\"magpie/cli\"\n\t\"os\"\n)\n\nfunc main() {\n\tos.Exit(cli.Execute())\n}\n"
 	if got != want {
 		t.Errorf("zero---with main mismatch:\n got %q\nwant %q", got, want)
 	}
@@ -25,7 +25,7 @@ func TestBuild_MainGolden_Two(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderMain: %v", err)
 	}
-	want := "package main\n\nimport (\n\t_ \"example.com/modA\"\n\t_ \"example.com/modB\"\n\t\"gomagpie/cli\"\n\t\"os\"\n)\n\nfunc main() {\n\tos.Exit(cli.Execute())\n}\n"
+	want := "package main\n\nimport (\n\t_ \"example.com/modA\"\n\t_ \"example.com/modB\"\n\t\"magpie/cli\"\n\t\"os\"\n)\n\nfunc main() {\n\tos.Exit(cli.Execute())\n}\n"
 	if got != want {
 		t.Errorf("two---with main mismatch:\n got %q\nwant %q", got, want)
 	}

@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"os"
 
-	"gomagpie/clean"
-	"gomagpie/crawl"
-	"gomagpie/scrape"
-	"gomagpie/vertical"
+	"magpie/clean"
+	"magpie/crawl"
+	"magpie/scrape"
+	"magpie/vertical"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )

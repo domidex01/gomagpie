@@ -3,9 +3,9 @@ package cli
 import (
 	"context"
 
-	"gomagpie/extract"
-	"gomagpie/scrape"
-	"gomagpie/store"
+	"magpie/extract"
+	"magpie/scrape"
+	"magpie/store"
 
 	"github.com/spf13/cobra"
 )

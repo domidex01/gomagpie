@@ -25,7 +25,7 @@ type StaticFetcher struct {
 
 // defaultHeaders is the single static-fetch header bundle (spec §1.3).
 var defaultHeaders = map[string]string{
-	"User-Agent":      "magpie/1.0 (+https://github.com/you/gomagpie)",
+	"User-Agent":      "magpie/1.0 (+https://github.com/you/magpie)",
 	"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 	"Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
 }
@@ -44,7 +44,7 @@ func GuardedTransport() *http.Transport {
 
 // GuardedTransportWithOptions builds the same transport with explicit
 // SSRF options — for clients whose PEER is entirely operator-configured
-// (e.g. the search provider registry + GOMAGPIE_SEARXNG_URL), where a
+// (e.g. the search provider registry + MAGPIE_SEARXNG_URL), where a
 // localhost/LAN endpoint is the legitimate deployment shape. Targets
 // from untrusted input never go through such a client.
 func GuardedTransportWithOptions(o SSRFOptions) *http.Transport {
@@ -77,7 +77,7 @@ func guardedDialFunc(o SSRFOptions, dialer *net.Dialer) func(ctx context.Context
 		if err != nil {
 			return nil, err
 		}
-		// Operator-configured egress (GOMAGPIE_PROXY / proxy pool) →
+		// Operator-configured egress (MAGPIE_PROXY / proxy pool) →
 		// this peer is the chosen proxy (trusted, often localhost),
 		// not the SSRF target: the policy applies to target URLs via
 		// ValidateURL + CheckRedirect. The decision is per dial-addr:
@@ -121,8 +121,8 @@ func addrIP(addr net.Addr) (netip.Addr, bool) {
 	return a, ok
 }
 
-// proxyFunc resolves the proxy per request: the pool (GOMAGPIE_PROXY_FILE,
-// then GOMAGPIE_PROXY) wins over the standard HTTP(S)_PROXY environment,
+// proxyFunc resolves the proxy per request: the pool (MAGPIE_PROXY_FILE,
+// then MAGPIE_PROXY) wins over the standard HTTP(S)_PROXY environment,
 // with a minimal NO_PROXY exact/dot-suffix bypass. Read per request so
 // env changes take effect without rebuilding the transport. The chosen
 // pick is recorded for the failover loop and response surfacing.
@@ -302,6 +302,11 @@ func (s *StaticFetcher) do(ctx context.Context, req FetchRequest) (*FetchRespons
 	}
 	for k, v := range headers {
 		hreq.Header.Set(k, v)
+	}
+	// Lang overrides the profile bundle's Accept-Language — one merge
+	// site, after profiles (profile maps are never mutated).
+	if req.Lang != "" {
+		hreq.Header.Set("Accept-Language", req.Lang)
 	}
 	cookies := req.Cookies
 	if cookies != "" {

@@ -15,12 +15,12 @@ import (
 	"sync"
 	"testing"
 
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	magpiemcp "gomagpie/mcp"
-	"gomagpie/scrape"
-	"gomagpie/selector"
-	"gomagpie/store"
+	"magpie/extract"
+	"magpie/fetch"
+	magpiemcp "magpie/mcp"
+	"magpie/scrape"
+	"magpie/selector"
+	"magpie/store"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -502,8 +502,8 @@ func TestVertical_MCP(t *testing.T) {
 
 	list := decodeOut(t, callTool(t, cs, "list_extractors", map[string]any{}, ""))
 	exs, ok := list["extractors"].([]any)
-	if !ok || len(exs) != 10 {
-		t.Fatalf("extractors = %#v, want exactly 10", list["extractors"])
+	if !ok || len(exs) != 15 {
+		t.Fatalf("extractors = %#v, want exactly 15 (10 pre-H + 5 Phase H)", list["extractors"])
 	}
 	names := map[string]bool{}
 	for _, e := range exs {
@@ -633,6 +633,7 @@ func TestIn_RoundTrip(t *testing.T) {
 			Render: "static", UseCache: flexTrue(), PageFormat: "llm",
 			Include: []string{"article"}, Exclude: []string{"nav"}, OnlyMainContent: flexTrue(),
 			Profile: "chrome", Cookies: "a=b",
+			Actions: []string{"click #consent", "wait-for .row:nth-child(30)"}, Lang: "fr-CA,fr;q=0.9",
 		}
 		raw, err := json.Marshal(want)
 		if err != nil {
@@ -644,6 +645,14 @@ func TestIn_RoundTrip(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("round trip = %+v, want %+v (shadow dropped a field?)", got, want)
+		}
+		// String-coerced actions list lands too (flex shadow, Phase H).
+		var coerced magpiemcp.ScrapeIn
+		if err := json.Unmarshal([]byte(`{"actions":"click #x","lang":"fr"}`), &coerced); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(coerced.Actions) != 1 || coerced.Actions[0] != "click #x" || coerced.Lang != "fr" {
+			t.Errorf("coerced = %+v, want single action + lang", coerced)
 		}
 	})
 	t.Run("crawl", func(t *testing.T) {
@@ -843,6 +852,56 @@ func TestCrawlSite_UsageHasFetchCounters(t *testing.T) {
 
 // --- Phase G G.5: the search tool. ---
 
+// TestMCP_ScreenshotActionRejected — H.7 gate 4: the screenshot action
+// verb never crosses the MCP boundary (an action line would hand an
+// agent a server-side file-write to an arbitrary path). The typed error
+// is the contract; the pre-flight fires before scrape.Run, so no browser
+// ever launches (a rod launch attempt in this sandbox fails with other
+// text entirely).
+func TestMCP_ScreenshotActionRejected(t *testing.T) {
+	db := openMCPDB(t)
+	cs := dialInMemory(t, magpiemcp.NewServer(agentDeps(db, &fakeExtractor{}, nil, &fakeAgentFetcher{bodies: map[string]fakeAgentResp{}})), nil)
+	res := callTool(t, cs, "scrape_url", map[string]any{
+		"url":     "https://example.com/x",
+		"actions": []any{"click #consent", "screenshot /etc/cron.d/x"},
+	}, "")
+	if !res.IsError {
+		t.Fatal("want tool error")
+	}
+	raw, err := json.Marshal(res.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, want := range []string{"CLI-only", "screenshot", "page_format screenshot"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("error %s missing %q", text, want)
+		}
+	}
+	// The comment line must NOT trip the pre-flight (parser-grammar parity):
+	// the same payload surfaces scrape's own validation error, never the
+	// CLI-only rejection (which fires first, in handleScrape).
+	res2, err := cs.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "scrape_url", Arguments: map[string]any{
+			"url": "https://example.com/x", "render": "static",
+			"actions": []any{"# screenshot notes"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("transport error: %v", err)
+	}
+	if !res2.IsError {
+		t.Fatal("want the static+actions validation error")
+	}
+	text2 := toolErrText(t, res2)
+	if strings.Contains(text2, "CLI-only") {
+		t.Errorf("comment line tripped the screenshot rejection: %s", text2)
+	}
+	if !strings.Contains(text2, "browser rendering") {
+		t.Errorf("comment line skipped to scrape validation: %s", text2)
+	}
+}
+
 // TestMCP_SearchMissingKey: agentDeps resolves keys via APIKeyFor; a
 // nil-key variant surfaces the typed missing-key error text (exit 7 at
 // the CLI edge).
@@ -914,7 +973,7 @@ func TestMCP_SearchZeroKeyProviderSmoke(t *testing.T) {
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	url := dead.URL
 	dead.Close() // closed port: connection refused, zero external dials
-	t.Setenv("GOMAGPIE_SEARXNG_URL", url)
+	t.Setenv("MAGPIE_SEARXNG_URL", url)
 	db := openMCPDB(t)
 	deps := agentDeps(db, &fakeExtractor{}, nil, &fakeAgentFetcher{})
 	deps.ScrapeDeps.APIKeyFor = func(string) string { return "" }

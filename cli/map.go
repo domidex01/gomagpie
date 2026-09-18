@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"gomagpie/crawl"
+	"magpie/crawl"
 
 	"github.com/spf13/cobra"
 )

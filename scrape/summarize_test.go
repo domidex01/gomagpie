@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"gomagpie/crawl"
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	"gomagpie/scrape"
-	"gomagpie/store"
+	"magpie/crawl"
+	"magpie/extract"
+	"magpie/fetch"
+	"magpie/scrape"
+	"magpie/store"
 )
 
 var _ extract.Prompter = (*fakePrompterExtractor)(nil)

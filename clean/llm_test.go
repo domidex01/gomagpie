@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/clean"
+	"magpie/clean"
 )
 
 var llmFixtures = []string{"article", "product", "spa-shell"}

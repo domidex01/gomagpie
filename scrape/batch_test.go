@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"gomagpie/extract"
-	"gomagpie/scrape"
+	"magpie/extract"
+	"magpie/scrape"
 )
 
 // TestBatch_ConcurrentSharedDeps locks the Deps thread-safety contract:

@@ -7,11 +7,11 @@ import (
 	"os"
 	"strings"
 
-	"gomagpie/clean"
-	"gomagpie/config"
-	"gomagpie/extract"
-	"gomagpie/scrape"
-	"gomagpie/store"
+	"magpie/clean"
+	"magpie/config"
+	"magpie/extract"
+	"magpie/scrape"
+	"magpie/store"
 
 	"github.com/spf13/cobra"
 )

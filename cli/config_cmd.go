@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"gomagpie/config"
+	"magpie/config"
 
 	"github.com/spf13/cobra"
 )

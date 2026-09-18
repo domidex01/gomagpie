@@ -3,7 +3,7 @@ package cli
 import (
 	"strings"
 
-	"gomagpie/build"
+	"magpie/build"
 
 	"github.com/spf13/cobra"
 )

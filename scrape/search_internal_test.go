@@ -19,7 +19,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gomagpie/store"
+	"magpie/store"
 )
 
 // The external scrape_test helpers are not visible from this internal
@@ -188,12 +188,12 @@ func TestSearchSearXNG(t *testing.T) {
 		_, _ = w.Write(fixtureBody(t, "searxng.json")) //nolint:errcheck // test server
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv("GOMAGPIE_SEARXNG_URL", srv.URL)
-	t.Setenv("GOMAGPIE_BRAVE_API_KEY", "")
-	t.Setenv("GOMAGPIE_SERPER_API_KEY", "")
-	t.Setenv("GOMAGPIE_SERPAPI_API_KEY", "")
-	t.Setenv("GOMAGPIE_EXA_API_KEY", "")
-	t.Setenv("GOMAGPIE_API_KEY", "")
+	t.Setenv("MAGPIE_SEARXNG_URL", srv.URL)
+	t.Setenv("MAGPIE_BRAVE_API_KEY", "")
+	t.Setenv("MAGPIE_SERPER_API_KEY", "")
+	t.Setenv("MAGPIE_SERPAPI_API_KEY", "")
+	t.Setenv("MAGPIE_EXA_API_KEY", "")
+	t.Setenv("MAGPIE_API_KEY", "")
 
 	// Zero-key path: no APIKeyFor configured at all.
 	records, err := Search(t.Context(), Deps{}, "golang scraping", SearchOptions{Provider: "searxng"})
@@ -210,7 +210,7 @@ func TestSearchSearXNGEmptyAndNoURL(t *testing.T) {
 		_, _ = w.Write(fixtureBody(t, "searxng_empty.json")) //nolint:errcheck // test server
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv("GOMAGPIE_SEARXNG_URL", srv.URL)
+	t.Setenv("MAGPIE_SEARXNG_URL", srv.URL)
 	records, err := Search(t.Context(), Deps{}, "nothing here", SearchOptions{Provider: "searxng"})
 	if err != nil {
 		t.Fatal(err)
@@ -219,9 +219,9 @@ func TestSearchSearXNGEmptyAndNoURL(t *testing.T) {
 		t.Errorf("zero-result fixture gave %d records, want 0", len(records))
 	}
 
-	t.Setenv("GOMAGPIE_SEARXNG_URL", "")
+	t.Setenv("MAGPIE_SEARXNG_URL", "")
 	_, err = Search(t.Context(), Deps{}, "q", SearchOptions{Provider: "searxng"})
-	if err == nil || !strings.Contains(err.Error(), "GOMAGPIE_SEARXNG_URL") {
+	if err == nil || !strings.Contains(err.Error(), "MAGPIE_SEARXNG_URL") {
 		t.Errorf("err = %v, want the typed unset-URL error", err)
 	}
 }
@@ -384,7 +384,7 @@ func TestSearchScrapeTop(t *testing.T) {
 		_, _ = w.Write(payload) //nolint:errcheck // test server
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv("GOMAGPIE_SEARXNG_URL", srv.URL)
+	t.Setenv("MAGPIE_SEARXNG_URL", srv.URL)
 
 	d := Deps{DB: localSearchDB(t)}
 	records, err := Search(t.Context(), d, "q", SearchOptions{Provider: "searxng", ScrapeTop: 2})

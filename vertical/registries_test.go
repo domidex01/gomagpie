@@ -3,9 +3,10 @@ package vertical_test
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
-	"gomagpie/vertical"
+	"magpie/vertical"
 )
 
 func TestRegistriesMatch_Table(t *testing.T) {
@@ -23,6 +24,12 @@ func TestRegistriesMatch_Table(t *testing.T) {
 		{"crates_io",
 			[]string{"https://crates.io/crates/demo-crate", "https://crates.io/crates/demo-crate/"},
 			[]string{"https://lib.rs/crates/demo-crate", "https://blog.example/crates/x", "https://crates.io/"}},
+		{"dockerhub",
+			[]string{"https://hub.docker.com/r/o/r", "https://hub.docker.com/r/o/r/"},
+			[]string{"https://hub.docker.com/r/", "https://hub.docker.com/", "https://example.com/r/o/r"}},
+		{"huggingface",
+			[]string{"https://huggingface.co/o/m", "https://huggingface.co/datasets/o/d"},
+			[]string{"https://huggingface.co/", "https://huggingface.co/o", "https://huggingface.co/datasets/o", "https://example.com/o/m"}},
 	}
 	for _, r := range rows {
 		ex, _ := vertical.Lookup(r.name)
@@ -99,5 +106,57 @@ func TestCratesExtract(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+// Fixtures dockerhub.json / huggingface.json / huggingface-dataset.json:
+// recorded 2026-09-19 shape fixtures mirroring the registry API v2 / HF
+// API responses (not live captures).
+
+func TestDockerHubExtract(t *testing.T) {
+	fx := &fakeVerticalFetcher{bodies: map[string]fakeResp{
+		"hub.docker.com/v2/repositories/demo/app": {body: verticalFixture(t, "dockerhub.json")},
+	}}
+	ex, _ := vertical.Lookup("dockerhub")
+	got, err := ex.Extract(context.Background(), fx, mustURL(t, "https://hub.docker.com/r/demo/app"))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if got["name"] != "demo/app" || got["star_count"] != float64(456) || got["pull_count"] != float64(7890123) {
+		t.Errorf("record = %#v", got)
+	}
+	reqs := fx.requests()
+	if len(reqs) != 1 || !strings.Contains(reqs[0], "/v2/repositories/demo/app/") {
+		t.Errorf("request = %v, want the v2 repositories API URL", reqs)
+	}
+}
+
+func TestHuggingFaceExtract(t *testing.T) {
+	fx := &fakeVerticalFetcher{bodies: map[string]fakeResp{
+		"api/models/org/demo-model":     {body: verticalFixture(t, "huggingface.json")},
+		"api/datasets/org/demo-dataset": {body: verticalFixture(t, "huggingface-dataset.json")},
+	}}
+	ex, _ := vertical.Lookup("huggingface")
+
+	got, err := ex.Extract(context.Background(), fx, mustURL(t, "https://huggingface.co/org/demo-model"))
+	if err != nil {
+		t.Fatalf("model Extract: %v", err)
+	}
+	if got["kind"] != "model" || got["id"] != "org/demo-model" || got["likes"] != float64(512) || got["downloads"] != float64(1234567) {
+		t.Errorf("model = %#v", got)
+	}
+	if got["pipeline_tag"] != "text-generation" {
+		t.Errorf("pipeline_tag = %v, want text-generation (models carry it)", got["pipeline_tag"])
+	}
+
+	ds, err := ex.Extract(context.Background(), fx, mustURL(t, "https://huggingface.co/datasets/org/demo-dataset"))
+	if err != nil {
+		t.Fatalf("dataset Extract: %v", err)
+	}
+	if ds["kind"] != "dataset" || ds["id"] != "org/demo-dataset" || ds["downloads"] != float64(4242) {
+		t.Errorf("dataset = %#v", ds)
+	}
+	if _, has := ds["pipeline_tag"]; has {
+		t.Errorf("dataset pipeline_tag = %v, want absent (datasets omit it)", ds["pipeline_tag"])
 	}
 }

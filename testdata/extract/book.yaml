@@ -9,4 +9,4 @@ properties:
     type: string
   year:
     type: [integer, "null"]
-    x-gomagpie: { coerce: "int" }
+    x-magpie: { coerce: "int" }

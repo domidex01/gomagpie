@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"gomagpie/vertical"
+	"magpie/vertical"
 
 	"github.com/spf13/cobra"
 )

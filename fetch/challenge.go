@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strings"
 
-	"gomagpie/clean"
+	"magpie/clean"
 )
 
 // ChallengeError is the typed challenge failure. Edges match it with

@@ -9,14 +9,14 @@ import (
 	"os"
 	"strings"
 
-	"gomagpie/clean"
-	"gomagpie/scrape"
+	"magpie/clean"
+	"magpie/scrape"
 
 	"github.com/spf13/cobra"
 )
 
 func newBatchCmd() *cobra.Command {
-	var file, format, render, profile, cookies, browser string
+	var file, format, render, profile, cookies, browser, lang string
 	var concurrency int
 	var include, exclude []string
 	var onlyMainContent bool
@@ -28,7 +28,7 @@ URL yields {"ok":false,"error":...} — never a whole-batch failure. Zero LLM.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBatch(cmd.Context(), args, batchOptions{
 				File: file, Format: format, Concurrency: concurrency,
-				Render: render, Profile: profile, Cookies: cookies, Browser: browser,
+				Render: render, Profile: profile, Cookies: cookies, Browser: browser, Lang: lang,
 				Include: include, Exclude: exclude, OnlyMainContent: onlyMainContent,
 			})
 		},
@@ -40,6 +40,7 @@ URL yields {"ok":false,"error":...} — never a whole-batch failure. Zero LLM.`,
 	cmd.Flags().StringVar(&profile, "profile", "", "request header bundle: default|chrome|firefox")
 	cmd.Flags().StringVar(&cookies, "cookies", "", "raw Cookie header value")
 	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: chrome|firefox|random")
+	cmd.Flags().StringVar(&lang, "lang", "", "Accept-Language header value, e.g. fr-CA,fr;q=0.9")
 	cmd.Flags().StringSliceVar(&include, "include", nil, "comma-separated CSS selectors: scrape only matching subtrees")
 	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "comma-separated CSS selectors: drop matching nodes")
 	cmd.Flags().BoolVar(&onlyMainContent, "only-main-content", false, "main-content only")
@@ -54,6 +55,7 @@ type batchOptions struct {
 	Profile         string
 	Browser         string
 	Cookies         string
+	Lang            string
 	Include         []string
 	Exclude         []string
 	OnlyMainContent bool
@@ -88,7 +90,7 @@ func runBatch(ctx context.Context, urls []string, o batchOptions) error {
 	if format != "jsonl" && format != "json" {
 		return fail(2, "batch: --format %q must be jsonl|json", o.Format)
 	}
-	if err := scrape.ValidateOptions(scrape.Options{Browser: o.Browser}); err != nil {
+	if err := scrape.ValidateOptions(scrape.Options{Browser: o.Browser, Lang: o.Lang}); err != nil {
 		return err
 	}
 
@@ -100,7 +102,7 @@ func runBatch(ctx context.Context, urls []string, o batchOptions) error {
 
 	items, err := scrape.Batch(ctx, scrapeDeps(db, cfg), urls, scrape.BatchOptions{
 		Concurrency: o.Concurrency, Render: o.Render, Profile: o.Profile,
-		Browser: o.Browser, Cookies: o.Cookies,
+		Browser: o.Browser, Cookies: o.Cookies, Lang: o.Lang,
 		Scope: clean.Scope{Include: o.Include, Exclude: o.Exclude, OnlyMainContent: o.OnlyMainContent},
 	})
 	if err != nil {

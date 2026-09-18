@@ -36,6 +36,26 @@ func init() {
 		Match:   matchCrates,
 		Extract: extractCrates,
 	})
+	register(Extractor{
+		Info: Info{
+			Name:     "dockerhub",
+			Label:    "Docker Hub",
+			Desc:     "Image repository metadata via the Docker Hub Registry API v2.",
+			Patterns: []string{"https://hub.docker.com/r/{owner}/{repo}"},
+		},
+		Match:   matchDockerHub,
+		Extract: extractDockerHub,
+	})
+	register(Extractor{
+		Info: Info{
+			Name:     "huggingface",
+			Label:    "Hugging Face",
+			Desc:     "Model or dataset metadata via the Hugging Face API (models carry pipeline_tag, datasets don't).",
+			Patterns: []string{"https://huggingface.co/{owner}/{name}", "https://huggingface.co/datasets/{owner}/{name}"},
+		},
+		Match:   matchHuggingFace,
+		Extract: extractHuggingFace,
+	})
 }
 
 func matchPypi(u *url.URL) bool {
@@ -134,4 +154,70 @@ func extractCrates(ctx context.Context, f Fetcher, u *url.URL) (map[string]any, 
 		"downloads":      num(crate, "downloads"),
 		"url":            "https://crates.io/crates/" + name,
 	}, nil
+}
+
+// matchDockerHub accepts hub.docker.com/r/{owner}/{repo} (both segments
+// required — bare /r/ and official-image shortcuts are out).
+func matchDockerHub(u *url.URL) bool {
+	if !hostIs(u, "hub.docker.com") {
+		return false
+	}
+	segs := pathSegs(u.Path)
+	return len(segs) >= 3 && segs[0] == "r" && segs[1] != "" && segs[2] != ""
+}
+
+func extractDockerHub(ctx context.Context, f Fetcher, u *url.URL) (map[string]any, error) {
+	segs := pathSegs(u.Path)
+	m, err := fetchJSON(ctx, f, "https://hub.docker.com/v2/repositories/"+segs[1]+"/"+segs[2]+"/")
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"name":         str(m, "name"),
+		"description":  str(m, "description"),
+		"star_count":   num(m, "star_count"),
+		"pull_count":   num(m, "pull_count"),
+		"last_updated": str(m, "last_updated"),
+	}, nil
+}
+
+// matchHuggingFace accepts huggingface.co/{owner}/{name} and the
+// datasets/{owner}/{name} prefix. A path under datasets/ must carry BOTH
+// segments — /datasets/{owner} alone is not a model URL.
+func matchHuggingFace(u *url.URL) bool {
+	if !hostIs(u, "huggingface.co") {
+		return false
+	}
+	segs := pathSegs(u.Path)
+	if len(segs) > 0 && segs[0] == "datasets" {
+		return len(segs) == 3 && segs[1] != "" && segs[2] != ""
+	}
+	return len(segs) == 2 && segs[0] != "" && segs[1] != ""
+}
+
+func extractHuggingFace(ctx context.Context, f Fetcher, u *url.URL) (map[string]any, error) {
+	segs := pathSegs(u.Path)
+	kind := "model"
+	id := ""
+	api := "https://huggingface.co/api/models/"
+	if segs[0] == "datasets" {
+		kind, id, api = "dataset", segs[1]+"/"+segs[2], "https://huggingface.co/api/datasets/"
+	} else {
+		id = segs[0] + "/" + segs[1]
+	}
+	m, err := fetchJSON(ctx, f, api+id)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"kind":      kind,
+		"id":        str(m, "id"),
+		"likes":     num(m, "likes"),
+		"downloads": num(m, "downloads"),
+		"tags":      m["tags"],
+	}
+	if tag := str(m, "pipeline_tag"); tag != "" {
+		out["pipeline_tag"] = tag
+	}
+	return out, nil
 }

@@ -15,14 +15,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
-	"gomagpie/clean"
-	"gomagpie/crawl"
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	"gomagpie/selector"
-	"gomagpie/store"
-	"gomagpie/vertical"
+	"magpie/clean"
+	"magpie/crawl"
+	"magpie/extract"
+	"magpie/fetch"
+	"magpie/selector"
+	"magpie/store"
+	"magpie/vertical"
 )
 
 // ErrMissingKey marks a schema extraction without credentials (CLI maps to exit 7).
@@ -57,6 +58,16 @@ type Options struct {
 	Cookies    string
 	// Viewport is "WxH" (e.g. 1280x800) for page-format screenshot.
 	Viewport string
+	// Actions are browser action lines (fetch.ParseActions grammar); they
+	// force the browser path and reject render=static. Validated here
+	// pre-I/O (parse errors surface as OptionsError with verb + line).
+	Actions []string
+	// Lang is the verbatim Accept-Language header value (control chars
+	// rejected — header-injection boundary).
+	Lang string
+	// Webhook URL for watch change notifications (operator-chosen
+	// endpoint; the POST client is scoped AllowPrivate).
+	Webhook string
 	// Vertical selects a zero-LLM typed extractor: "" (default) = off,
 	// "auto" = strict auto-dispatch, or an extractor name for explicit
 	// selection. Explicit selection with a schema ignores the schema.
@@ -128,6 +139,17 @@ func ValidateOptions(o Options) error {
 			return &OptionsError{fmt.Sprintf("scrape: vertical %q unknown (see `magpie vertical --list`)", o.Vertical)}
 		}
 	}
+	if len(o.Actions) > 0 {
+		if render == "static" {
+			return &OptionsError{"scrape: actions require browser rendering (render auto|browser, not static)"}
+		}
+		if _, err := fetch.ParseActions(o.Actions); err != nil {
+			return &OptionsError{fmt.Sprintf("scrape: %v", err)}
+		}
+	}
+	if strings.ContainsFunc(o.Lang, unicode.IsControl) {
+		return &OptionsError{"scrape: lang must not contain control characters (it becomes a raw Accept-Language header value)"}
+	}
 	return nil
 }
 
@@ -167,8 +189,10 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 
 	// Screenshot is a browser-only capability: no static fetch, no clean,
 	// no LLM. Fresh browser per capture — same pattern as fetchBrowser.
+	// With actions, the capture joins that browser session (click-then-
+	// capture: the screenshot becomes the final action step).
 	if o.PageFormat == "screenshot" {
-		png, serr := screenshotPage(ctx, rawURL, o.Viewport)
+		png, serr := screenshotPage(ctx, rawURL, o.Viewport, o.Actions)
 		if serr != nil {
 			finish(0, 1, "error")
 			return Result{}, serr
@@ -189,7 +213,7 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	}
 	fetchStart := time.Now()
 	render := defaultRender(o.Render) // same default ValidateOptions validated
-	page, err := fetchURL(ctx, vf, rawURL, render, o.Profile, o.Cookies, o.Browser)
+	page, err := fetchURL(ctx, vf, rawURL, render, o)
 	if err != nil {
 		finish(0, 1, "error")
 		return Result{}, err
@@ -325,20 +349,22 @@ func runVertical(ctx context.Context, vf vertical.Fetcher, rawURL string, ex ver
 	return base, nil
 }
 
-func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render, profile, cookies, browser string) (*fetch.FetchResponse, error) {
-	if render == "browser" {
-		return fetchBrowser(ctx, rawURL)
+func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render string, o Options) (*fetch.FetchResponse, error) {
+	// Actions force the browser path: their whole point is DOM interaction
+	// a static fetch cannot honor (ValidateOptions rejected static).
+	if render == "browser" || len(o.Actions) > 0 {
+		return fetchBrowser(ctx, rawURL, o.Lang, o.Actions)
 	}
 	// A4 pass-through: every status reaches Clean+Classify so blocked pages
 	// get typed quality errors instead of "fetch: HTTP %d".
-	resp, err := vf.Fetch(ctx, fetch.FetchRequest{URL: rawURL, Profile: profile, Cookies: cookies, Browser: browser})
+	resp, err := vf.Fetch(ctx, fetch.FetchRequest{URL: rawURL, Profile: o.Profile, Cookies: o.Cookies, Browser: o.Browser, Lang: o.Lang})
 	if err != nil {
 		// G.2: a typed challenge gets exactly one rod escalation attempt
 		// under render=auto (a real browser often clears it); static
 		// callers asked for no browser and get the typed error directly.
 		var ce *fetch.ChallengeError
 		if render != "static" && errors.As(err, &ce) {
-			bresp, berr := fetchBrowser(ctx, rawURL)
+			bresp, berr := fetchBrowser(ctx, rawURL, o.Lang, o.Actions)
 			if berr == nil && fetch.DetectChallenge(bresp.HTML, bresp.Headers, bresp.StatusCode) == "" {
 				return bresp, nil
 			}
@@ -354,7 +380,7 @@ func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render, profile,
 	if embedded || !fetch.NeedsBrowser(score) {
 		return resp, nil
 	}
-	return fetchBrowser(ctx, rawURL)
+	return fetchBrowser(ctx, rawURL, o.Lang, o.Actions)
 }
 
 // parseViewport parses the WxH screenshot viewport shape (0,0 = default).
@@ -374,23 +400,33 @@ func parseViewport(v string) (int, int, error) {
 	return pw, ph, nil
 }
 
-// screenshotPage captures a full-page PNG through a fresh browser.
-func screenshotPage(ctx context.Context, rawURL, viewport string) ([]byte, error) {
+// screenshotPage captures a full-page PNG through a fresh browser;
+// with actions the capture joins the action session as its final step.
+func screenshotPage(ctx context.Context, rawURL, viewport string, actions []string) ([]byte, error) {
 	w, h, err := parseViewport(viewport)
 	if err != nil {
 		return nil, &OptionsError{fmt.Sprintf("scrape: viewport %q must be WxH (e.g. 1280x800)", viewport)}
 	}
-	return fetch.ScreenshotPage(ctx, rawURL, w, h)
-}
-
-func fetchBrowser(ctx context.Context, rawURL string) (*fetch.FetchResponse, error) {
-	rod := fetch.NewRodFetcher()
-	defer func() { _ = rod.Close() }() //nolint:errcheck // browser teardown; failure unactionable
-	resp, err := rod.Fetch(ctx, fetch.FetchRequest{URL: rawURL})
+	if len(actions) == 0 {
+		return fetch.ScreenshotPage(ctx, rawURL, w, h)
+	}
+	acts, err := fetch.ParseActions(actions)
 	if err != nil {
 		return nil, err
 	}
-	return resp, nil
+	return fetch.ScreenshotActions(ctx, rawURL, w, h, acts)
+}
+
+func fetchBrowser(ctx context.Context, rawURL, lang string, actions []string) (*fetch.FetchResponse, error) {
+	// ValidateOptions pre-flighted the lines for Run; direct callers get
+	// the typed line error here.
+	acts, err := fetch.ParseActions(actions)
+	if err != nil {
+		return nil, err
+	}
+	rod := fetch.NewRodFetcher()
+	defer func() { _ = rod.Close() }() //nolint:errcheck // browser teardown; failure unactionable
+	return rod.FetchWithActions(ctx, fetch.FetchRequest{URL: rawURL, Lang: lang}, acts)
 }
 
 func domainOfURL(rawURL string) string {

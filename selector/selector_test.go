@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"gomagpie/extract"
-	"gomagpie/selector"
+	"magpie/extract"
+	"magpie/selector"
 )
 
 // --- fakes (copied per package; rule-of-three, no testutil) ---
@@ -96,10 +96,10 @@ required: [price, title]
 properties:
   price:
     type: number
-    x-gomagpie: { coerce: "eur_decimal" }
+    x-magpie: { coerce: "eur_decimal" }
   title:
     type: string
-    x-gomagpie: { trim: true }
+    x-magpie: { trim: true }
   ean:
     type: string
 `
@@ -111,10 +111,10 @@ required: [price, title]
 properties:
   price:
     type: number
-    x-gomagpie: { css_hint: "#price", coerce: "eur_decimal" }
+    x-magpie: { css_hint: "#price", coerce: "eur_decimal" }
   title:
     type: string
-    x-gomagpie: { trim: true }
+    x-magpie: { trim: true }
   ean:
     type: string
 `
@@ -218,7 +218,7 @@ type: object
 additionalProperties: false
 required: [price]
 properties:
-  price: {type: number, x-gomagpie: {css_hint: "#nope", coerce: "eur_decimal"}}
+  price: {type: number, x-magpie: {css_hint: "#nope", coerce: "eur_decimal"}}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +250,7 @@ type: object
 additionalProperties: false
 required: [price]
 properties:
-  price: {type: number, x-gomagpie: {coerce: "eur_decimal"}}
+  price: {type: number, x-magpie: {coerce: "eur_decimal"}}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +322,7 @@ type: object
 additionalProperties: false
 required: [price]
 properties:
-  price: {type: number, x-gomagpie: {xpath_hint: "//span[@id='price']", coerce: "eur_decimal"}}
+  price: {type: number, x-magpie: {xpath_hint: "//span[@id='price']", coerce: "eur_decimal"}}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -378,7 +378,7 @@ type: object
 additionalProperties: false
 required: [price, sku]
 properties:
-  price: {type: number, x-gomagpie: {coerce: "eur_decimal"}}
+  price: {type: number, x-magpie: {coerce: "eur_decimal"}}
   sku: {type: string}
 `))
 	if err != nil {
@@ -508,8 +508,8 @@ type: object
 additionalProperties: false
 required: [price, ean]
 properties:
-  price: {type: number, x-gomagpie: {coerce: "eur_decimal"}}
-  ean: {type: string, x-gomagpie: {jsonld_path: "$.gtin13"}}
+  price: {type: number, x-magpie: {coerce: "eur_decimal"}}
+  ean: {type: string, x-magpie: {jsonld_path: "$.gtin13"}}
 `))
 	if err != nil {
 		t.Fatal(err)

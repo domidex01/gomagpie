@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/vertical"
+	"magpie/vertical"
 )
 
 func TestArxivMatch_Table(t *testing.T) {

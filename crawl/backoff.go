@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"gomagpie/fetch"
+	"magpie/fetch"
 
 	"github.com/cenkalti/backoff/v5"
 )

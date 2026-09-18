@@ -13,10 +13,10 @@ import (
 	"sync"
 	"testing"
 
-	"gomagpie/extract"
-	magpiemcp "gomagpie/mcp"
-	"gomagpie/scrape"
-	"gomagpie/store"
+	"magpie/extract"
+	magpiemcp "magpie/mcp"
+	"magpie/scrape"
+	"magpie/store"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )

@@ -29,7 +29,7 @@ func NewAnthropic(baseURL, apiKey, model string, sch *Schema) *AnthropicAdapter 
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
-	if v := os.Getenv("GOMAGPIE_BASE_URL"); v != "" {
+	if v := os.Getenv("MAGPIE_BASE_URL"); v != "" {
 		baseURL = v
 	}
 	return &AnthropicAdapter{BaseURL: baseURL, APIKey: apiKey, Model: model, schema: sch}

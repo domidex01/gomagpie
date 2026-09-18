@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/config"
+	"magpie/config"
 )
 
 func isolatedXDG(t *testing.T) string {
@@ -20,14 +20,14 @@ func isolatedXDG(t *testing.T) string {
 
 func TestPrecedence(t *testing.T) {
 	dir := isolatedXDG(t)
-	cfgPath := filepath.Join(dir, "gomagpie", "config.yaml")
+	cfgPath := filepath.Join(dir, "magpie", "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(cfgPath, []byte("extract_provider: openai\nmodel: file-model\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GOMAGPIE_EXTRACT_PROVIDER", "ollama")
+	t.Setenv("MAGPIE_EXTRACT_PROVIDER", "ollama")
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestPrecedence(t *testing.T) {
 func TestKeyLookupOrder(t *testing.T) {
 	isolatedXDG(t)
 	cfg := config.DefaultConfig()
-	t.Setenv("GOMAGPIE_ANTHROPIC_API_KEY", "env-key")
+	t.Setenv("MAGPIE_ANTHROPIC_API_KEY", "env-key")
 	if k := cfg.APIKey("anthropic"); k != "env-key" {
 		t.Errorf("env key: %q", k)
 	}
@@ -67,7 +67,7 @@ func TestKeyLookupOrder(t *testing.T) {
 func TestKeyEnvDashToUnderscore(t *testing.T) {
 	isolatedXDG(t)
 	cfg := config.DefaultConfig()
-	t.Setenv("GOMAGPIE_OPENCODE_GO_API_KEY", "env-key")
+	t.Setenv("MAGPIE_OPENCODE_GO_API_KEY", "env-key")
 	if k := cfg.APIKey("opencode-go"); k != "env-key" {
 		t.Errorf("APIKey(opencode-go) = %q, want dash-to-underscore env hit", k)
 	}
@@ -91,7 +91,7 @@ func TestDefaultModels(t *testing.T) {
 
 func TestShowRedacts(t *testing.T) {
 	isolatedXDG(t)
-	t.Setenv("GOMAGPIE_ANTHROPIC_API_KEY", "super-secret")
+	t.Setenv("MAGPIE_ANTHROPIC_API_KEY", "super-secret")
 	cfg, err := config.Load(filepath.Join(t.TempDir(), "nope.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestShowRedacts(t *testing.T) {
 
 func TestServeKeys_OverlayChain(t *testing.T) {
 	dir := isolatedXDG(t)
-	cfgPath := filepath.Join(dir, "gomagpie", "config.yaml")
+	cfgPath := filepath.Join(dir, "magpie", "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -136,8 +136,8 @@ func TestServeKeys_OverlayChain(t *testing.T) {
 		t.Errorf("file serve_addr = %q, want 127.0.0.1:9999", cfg.ServeAddr)
 	}
 	// Env beats file.
-	t.Setenv("GOMAGPIE_SERVE_TRANSPORT", "http")
-	t.Setenv("GOMAGPIE_EXPORTER_CMD", "myprog --fast")
+	t.Setenv("MAGPIE_SERVE_TRANSPORT", "http")
+	t.Setenv("MAGPIE_EXPORTER_CMD", "myprog --fast")
 	cfg, err = config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +161,7 @@ func TestServeKeys_OverlayChain(t *testing.T) {
 
 func TestConfigShow_HasPhase3Keys(t *testing.T) {
 	isolatedXDG(t)
-	cfg, err := config.Load(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "gomagpie", "config.yaml"))
+	cfg, err := config.Load(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "magpie", "config.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}

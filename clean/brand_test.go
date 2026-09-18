@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"gomagpie/clean"
+	"magpie/clean"
 )
 
 func brandFile(t *testing.T, name string) []byte {

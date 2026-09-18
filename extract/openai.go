@@ -33,7 +33,7 @@ func NewOpenAI(baseURL, apiKey, model string, sch *Schema) *OpenAIAdapter {
 		baseURL = "https://api.openai.com/v1"
 	}
 	// Test-only env override for base URL — no test hooks beyond env config.
-	if v := os.Getenv("GOMAGPIE_BASE_URL"); v != "" {
+	if v := os.Getenv("MAGPIE_BASE_URL"); v != "" {
 		baseURL = v
 	}
 	return &OpenAIAdapter{BaseURL: baseURL, APIKey: apiKey, Model: model, schema: sch}
@@ -82,7 +82,7 @@ func (o *OpenAIAdapter) promptOnce(ctx context.Context, system, user string, doc
 		body["response_format"] = map[string]any{
 			"type": "json_schema",
 			"json_schema": map[string]any{
-				"name":   "gomagpie",
+				"name":   "magpie",
 				"strict": true,
 				"schema": doc,
 			},

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 
-	"gomagpie/clean"
-	"gomagpie/config"
-	"gomagpie/crawl"
-	"gomagpie/fetch"
-	"gomagpie/scrape"
-	"gomagpie/vertical"
+	"magpie/clean"
+	"magpie/config"
+	"magpie/crawl"
+	"magpie/fetch"
+	"magpie/scrape"
+	"magpie/vertical"
 
 	"github.com/spf13/cobra"
 )
@@ -41,8 +41,8 @@ func rootCmd() *cobra.Command {
 			// ponytail: the env is the real config surface; the flag is
 			// sugar so GUI/docs don't need env plumbing.
 			if proxyFile != "" {
-				if err := os.Setenv("GOMAGPIE_PROXY_FILE", proxyFile); err != nil {
-					return fmt.Errorf("set GOMAGPIE_PROXY_FILE: %w", err)
+				if err := os.Setenv("MAGPIE_PROXY_FILE", proxyFile); err != nil {
+					return fmt.Errorf("set MAGPIE_PROXY_FILE: %w", err)
 				}
 			}
 			return nil
@@ -53,9 +53,9 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&cacheDB, "cache-db", "", "SQLite cache DB path")
 	root.PersistentFlags().Float64Var(&maxCost, "max-cost", 0, "USD cost ceiling (abort before exceeding; flat-rate providers codex, opencode-go exempt)")
 	root.PersistentFlags().StringVar(&apiKey, "api-key", "", "provider API key (overrides env/keyring)")
-	root.PersistentFlags().StringVar(&proxyFile, "proxy-file", "", "proxy pool file: one URL (http|https|socks5) or host:port:user:pass per line; # comments (overrides GOMAGPIE_PROXY)")
+	root.PersistentFlags().StringVar(&proxyFile, "proxy-file", "", "proxy pool file: one URL (http|https|socks5) or host:port:user:pass per line; # comments (overrides MAGPIE_PROXY)")
 	root.AddCommand(newScrapeCmd(), newExtractCmd(), newConfigCmd(), newCrawlCmd(), newCacheCmd(), newServeCmd(), newBuildCmd(),
-		newBatchCmd(), newMapCmd(), newSummarizeCmd(), newDiffCmd(), newBrandCmd(), newVerticalCmd(), newSearchCmd())
+		newBatchCmd(), newMapCmd(), newSummarizeCmd(), newDiffCmd(), newBrandCmd(), newVerticalCmd(), newSearchCmd(), newWatchCmd())
 	return root
 }
 

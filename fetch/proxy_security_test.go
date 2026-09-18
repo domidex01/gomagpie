@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gomagpie/fetch"
+	"magpie/fetch"
 )
 
 func poolFile(t *testing.T, lines ...string) string {
@@ -117,8 +117,8 @@ func TestFakeSOCKS5_SelfCheck(t *testing.T) {
 		_, _ = w.Write([]byte("selfcheck")) //nolint:errcheck // test server
 	})
 	socks, conns, requested := fakeSOCKS5(t, mustURL(t, origin.URL))
-	t.Setenv("GOMAGPIE_PROXY", "")
-	t.Setenv("GOMAGPIE_PROXY_FILE", poolFile(t, socks))
+	t.Setenv("MAGPIE_PROXY", "")
+	t.Setenv("MAGPIE_PROXY_FILE", poolFile(t, socks))
 	t.Setenv("NO_PROXY", "")
 	f, err := fetch.NewStaticFetcherWithOptions(fetch.SSRFOptions{AllowPrivate: true})
 	if err != nil {
@@ -145,8 +145,8 @@ func TestProxy_SecurityMatrix(t *testing.T) {
 	t.Run("no proxy / loopback target rejected pre-request", func(t *testing.T) {
 		var hits atomic.Int64
 		origin := hitOrigin(t, &hits, func(w http.ResponseWriter, _ *http.Request) {})
-		t.Setenv("GOMAGPIE_PROXY", "")
-		t.Setenv("GOMAGPIE_PROXY_FILE", "")
+		t.Setenv("MAGPIE_PROXY", "")
+		t.Setenv("MAGPIE_PROXY_FILE", "")
 		// STRICT: AllowPrivate would license the loopback target and
 		// defeat the row — the no-proxy baseline has no operator opt-in.
 		f, err := fetch.NewStaticFetcherWithOptions(fetch.SSRFOptions{})
@@ -165,8 +165,8 @@ func TestProxy_SecurityMatrix(t *testing.T) {
 	t.Run("env single proxy / private target allowed", func(t *testing.T) {
 		var originHits, proxyHits atomic.Int64
 		origin := hitOrigin(t, &originHits, func(w http.ResponseWriter, _ *http.Request) {})
-		t.Setenv("GOMAGPIE_PROXY", newProxyOrigin(t, &proxyHits, origin.URL))
-		t.Setenv("GOMAGPIE_PROXY_FILE", "")
+		t.Setenv("MAGPIE_PROXY", newProxyOrigin(t, &proxyHits, origin.URL))
+		t.Setenv("MAGPIE_PROXY_FILE", "")
 		t.Setenv("NO_PROXY", "")
 		f := relaxedFetcher(t)
 		if _, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: origin.URL}); err != nil {
@@ -182,8 +182,8 @@ func TestProxy_SecurityMatrix(t *testing.T) {
 		origin := hitOrigin(t, &originHits, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte("via pool")) //nolint:errcheck // test server
 		})
-		t.Setenv("GOMAGPIE_PROXY", "")
-		t.Setenv("GOMAGPIE_PROXY_FILE", poolFile(t, "http://"+proxyURLhost(newProxyOrigin(t, &proxyHits, origin.URL))))
+		t.Setenv("MAGPIE_PROXY", "")
+		t.Setenv("MAGPIE_PROXY_FILE", poolFile(t, "http://"+proxyURLhost(newProxyOrigin(t, &proxyHits, origin.URL))))
 		t.Setenv("NO_PROXY", "")
 		// Relaxed: the loopback TARGET needs the explicit opt-in to pass
 		// ValidateURL; the trust decision under test is the dial-peer skip.
@@ -203,8 +203,8 @@ func TestProxy_SecurityMatrix(t *testing.T) {
 			_, _ = w.Write([]byte("via tor")) //nolint:errcheck // test server
 		})
 		socks, conns, requested := fakeSOCKS5(t, mustURL(t, origin.URL))
-		t.Setenv("GOMAGPIE_PROXY", "")
-		t.Setenv("GOMAGPIE_PROXY_FILE", poolFile(t, socks))
+		t.Setenv("MAGPIE_PROXY", "")
+		t.Setenv("MAGPIE_PROXY_FILE", poolFile(t, socks))
 		t.Setenv("NO_PROXY", "")
 		// STRICT: the strongest form of the load-bearing row — a public
 		// target through a loopback proxy works ONLY because proxied
@@ -234,8 +234,8 @@ func TestProxy_SecurityMatrix(t *testing.T) {
 
 	t.Run("credentials never surface", func(t *testing.T) {
 		const secret = "hunter2password"
-		t.Setenv("GOMAGPIE_PROXY", "")
-		t.Setenv("GOMAGPIE_PROXY_FILE", poolFile(t,
+		t.Setenv("MAGPIE_PROXY", "")
+		t.Setenv("MAGPIE_PROXY_FILE", poolFile(t,
 			"http://cust:"+secret+"@127.0.0.1:1", // dead port → forced failure path
 			"http://127.0.0.1:1",                 // also dead → all-dead error path
 		))

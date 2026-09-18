@@ -3,7 +3,7 @@ package core_test
 import (
 	"testing"
 
-	"gomagpie/core"
+	"magpie/core"
 )
 
 func TestRegistry_Gate(t *testing.T) {

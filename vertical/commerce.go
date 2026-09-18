@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	"gomagpie/clean"
+	"magpie/clean"
 
 	"github.com/PuerkitoBio/goquery"
 )

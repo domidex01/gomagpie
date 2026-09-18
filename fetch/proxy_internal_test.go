@@ -307,8 +307,8 @@ func TestProxiedForHost(t *testing.T) {
 	if err := os.WriteFile(file, []byte("socks5://127.0.0.1:9050\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GOMAGPIE_PROXY", "")
-	t.Setenv("GOMAGPIE_PROXY_FILE", file)
+	t.Setenv("MAGPIE_PROXY", "")
+	t.Setenv("MAGPIE_PROXY_FILE", file)
 	t.Setenv("NO_PROXY", "")
 	if !proxiedForHost("target.example") {
 		t.Error("pool set ⇒ proxiedForHost must be true (operator-chosen egress)")
@@ -317,15 +317,15 @@ func TestProxiedForHost(t *testing.T) {
 	if proxiedForHost("target.example") {
 		t.Error("NO_PROXY-exempt host must NOT be proxied — the peer check applies")
 	}
-	t.Setenv("GOMAGPIE_PROXY_FILE", "")
+	t.Setenv("MAGPIE_PROXY_FILE", "")
 	t.Setenv("NO_PROXY", "")
-	t.Setenv("GOMAGPIE_PROXY", "http://127.0.0.1:3128")
+	t.Setenv("MAGPIE_PROXY", "http://127.0.0.1:3128")
 	if !proxiedForHost("target.example") {
 		t.Error("env-single proxy ⇒ proxiedForHost must be true")
 	}
 }
 
-// TestPool_CacheKeyedByEnv: changing GOMAGPIE_PROXY_FILE re-parses —
+// TestPool_CacheKeyedByEnv: changing MAGPIE_PROXY_FILE re-parses —
 // a process-once singleton would poison every t.Setenv test.
 func TestPool_CacheKeyedByEnv(t *testing.T) {
 	dir := t.TempDir()
@@ -337,15 +337,15 @@ func TestPool_CacheKeyedByEnv(t *testing.T) {
 	if err := os.WriteFile(b, []byte("http://10.0.0.2:2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GOMAGPIE_PROXY", "")
-	t.Setenv("GOMAGPIE_PROXY_STRATEGY", "")
+	t.Setenv("MAGPIE_PROXY", "")
+	t.Setenv("MAGPIE_PROXY_STRATEGY", "")
 	t.Setenv("NO_PROXY", "")
-	t.Setenv("GOMAGPIE_PROXY_FILE", a)
+	t.Setenv("MAGPIE_PROXY_FILE", a)
 	pa, err := currentPool()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GOMAGPIE_PROXY_FILE", b)
+	t.Setenv("MAGPIE_PROXY_FILE", b)
 	pb, err := currentPool()
 	if err != nil {
 		t.Fatal(err)
@@ -386,9 +386,9 @@ func TestPool_FailoverMarksCooldown(t *testing.T) {
 	if err := os.WriteFile(poolPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GOMAGPIE_PROXY", "")
-	t.Setenv("GOMAGPIE_PROXY_FILE", poolPath)
-	t.Setenv("GOMAGPIE_PROXY_STRATEGY", "")
+	t.Setenv("MAGPIE_PROXY", "")
+	t.Setenv("MAGPIE_PROXY_FILE", poolPath)
+	t.Setenv("MAGPIE_PROXY_STRATEGY", "")
 	t.Setenv("NO_PROXY", "")
 	s, err := NewStaticFetcherWithOptions(SSRFOptions{AllowPrivate: true})
 	if err != nil {

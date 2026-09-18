@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/clean"
-	"gomagpie/fetch"
+	"magpie/clean"
+	"magpie/fetch"
 )
 
 func loadChallengeFixture(t *testing.T, name string) []byte {

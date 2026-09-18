@@ -12,7 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// FieldHints carries parsed x-gomagpie extensions per JSON-pointer field path.
+// FieldHints carries parsed x-magpie extensions per JSON-pointer field path.
 type FieldHints struct {
 	Coerce     map[string]string // field path -> coerce kind
 	CSSHint    map[string]string
@@ -29,7 +29,7 @@ type Schema struct {
 	Hints     FieldHints
 }
 
-// LoadSchema loads YAML or JSON draft 2020-12, compiles, parses x-gomagpie.
+// LoadSchema loads YAML or JSON draft 2020-12, compiles, parses x-magpie.
 func LoadSchema(path string) (*Schema, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -97,11 +97,11 @@ func (s *Schema) parseHints(node any, path string) error {
 	if !ok {
 		return nil
 	}
-	if xg, ok := obj["x-gomagpie"].(map[string]any); ok {
+	if xg, ok := obj["x-magpie"].(map[string]any); ok {
 		field := strings.TrimPrefix(path, "/properties/")
 		if str, ok := xg["coerce"].(string); ok && str != "" {
 			if !knownCoerce[str] {
-				return fmt.Errorf("extract: unknown x-gomagpie.coerce %q at %s", str, path)
+				return fmt.Errorf("extract: unknown x-magpie.coerce %q at %s", str, path)
 			}
 			s.Hints.Coerce[field] = str
 		}

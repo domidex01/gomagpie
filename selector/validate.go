@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"gomagpie/extract"
+	"magpie/extract"
 
 	"github.com/PuerkitoBio/goquery"
 )

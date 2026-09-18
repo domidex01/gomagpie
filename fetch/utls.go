@@ -104,7 +104,7 @@ func (s *StaticFetcher) clientFor(req FetchRequest) (*http.Client, error) {
 
 // browserDial is the raw-TCP dial under the uTLS handshake. Proxied
 // hosts tunnel via CONNECT (trusted peer, no IP check — same semantics
-// as the stock transport under GOMAGPIE_PROXY); everything else gets the
+// as the stock transport under MAGPIE_PROXY); everything else gets the
 // guarded dial + post-connect peer-IP check before any TLS byte.
 func browserDial(o SSRFOptions) impersonate.DialFunc {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}

@@ -14,13 +14,13 @@ import (
 	"sync"
 	"testing"
 
-	"gomagpie/clean"
-	"gomagpie/crawl"
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	"gomagpie/scrape"
-	"gomagpie/selector"
-	"gomagpie/store"
+	"magpie/clean"
+	"magpie/crawl"
+	"magpie/extract"
+	"magpie/fetch"
+	"magpie/scrape"
+	"magpie/selector"
+	"magpie/store"
 )
 
 type fakeExtractor struct {

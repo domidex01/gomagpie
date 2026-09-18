@@ -12,12 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gomagpie/clean"
-	"gomagpie/core"
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	"gomagpie/selector"
-	"gomagpie/store"
+	"magpie/clean"
+	"magpie/core"
+	"magpie/extract"
+	"magpie/fetch"
+	"magpie/selector"
+	"magpie/store"
 )
 
 // ErrRobotsBlocked marks a crawl refused by robots.txt (deny or unreachable).
@@ -45,6 +45,7 @@ type Options struct {
 	Model        string
 	MaxCost      float64
 	Browser      string // TLS fingerprint: chrome|firefox|random ("" = stock)
+	Lang         string // verbatim Accept-Language override (control chars rejected by scrape.ValidateOptions)
 	DB           *store.DB
 	// Scope bounds (compiled once in Run; bad globs fail pre-I/O).
 	PathPrefix      string
@@ -426,7 +427,7 @@ func (c *crawlContext) fetchPage(ctx context.Context, task core.FetchTask) (core
 	var last *fetch.FetchResponse
 	fetchStart := time.Now()
 	resp, err := FetchWithRetry(ctx, func() (*fetch.FetchResponse, error) {
-		r, ferr := c.static.Fetch(ctx, fetch.FetchRequest{URL: task.URL, Browser: c.opts.Browser})
+		r, ferr := c.static.Fetch(ctx, fetch.FetchRequest{URL: task.URL, Browser: c.opts.Browser, Lang: c.opts.Lang})
 		// Reset on transport failure: qualityErr must classify the
 		// terminal outcome, never a stale response from an earlier try.
 		last = r
@@ -453,7 +454,7 @@ func (c *crawlContext) fetchPage(ctx context.Context, task core.FetchTask) (core
 			defer c.gate.Release()
 			rod := fetch.NewRodFetcher()
 			defer func() { _ = rod.Close() }() //nolint:errcheck // teardown unactionable
-			return rod.Fetch(ctx, fetch.FetchRequest{URL: task.URL})
+			return rod.Fetch(ctx, fetch.FetchRequest{URL: task.URL, Lang: c.opts.Lang})
 		}()
 		if berr != nil {
 			return core.FetchedPage{Task: task, Err: berr}, nil

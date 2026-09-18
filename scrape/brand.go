@@ -3,8 +3,8 @@ package scrape
 import (
 	"context"
 
-	"gomagpie/clean"
-	"gomagpie/fetch"
+	"magpie/clean"
+	"magpie/fetch"
 )
 
 // BrandResult is one brand extraction: page identity plus the zero-LLM

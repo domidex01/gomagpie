@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gomagpie/fetch"
+	"magpie/fetch"
 )
 
 // TestSecurityFilesUseExplicitOptions bolts the test-binary hatch shut:
@@ -216,7 +216,7 @@ func TestSSRF_RedirectAbort(t *testing.T) {
 }
 
 // TestSSRF_FileGate: file:// is gated by explicit options in production
-// shape. Env resolution (GOMAGPIE_ALLOW_FILE=1, exact string) rides the
+// shape. Env resolution (MAGPIE_ALLOW_FILE=1, exact string) rides the
 // bare constructor and is covered by the existing suite (TestStaticFileURL
 // et al.) — the hatch's one-directional rule means no NEW test depends on
 // it.
@@ -234,7 +234,7 @@ func TestSSRF_FileGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = f.Fetch(t.Context(), fetch.FetchRequest{URL: fileURL})
-	if !errors.Is(err, fetch.ErrPrivateAddress) || !strings.Contains(err.Error(), "GOMAGPIE_ALLOW_FILE") {
+	if !errors.Is(err, fetch.ErrPrivateAddress) || !strings.Contains(err.Error(), "MAGPIE_ALLOW_FILE") {
 		t.Fatalf("default file:// = %v, want ErrPrivateAddress naming the env var", err)
 	}
 

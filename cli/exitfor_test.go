@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/clean"
-	"gomagpie/crawl"
-	"gomagpie/fetch"
-	"gomagpie/scrape"
-	"gomagpie/vertical"
+	"magpie/clean"
+	"magpie/crawl"
+	"magpie/fetch"
+	"magpie/scrape"
+	"magpie/vertical"
 )
 
 // Table over the single exit-code map (exitCode — pure, no printing).

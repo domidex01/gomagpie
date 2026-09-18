@@ -1,0 +1,1 @@
+{"items":[{"score":75,"body":"<p>Use encoding/json with struct tags.</p>","is_accepted":true,"answer_id":1},{"score":30,"body":"<p>Use json.Decoder for streams.</p>","is_accepted":false,"answer_id":2}]}

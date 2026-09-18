@@ -5,9 +5,9 @@ required: [name, price]
 properties:
   name:
     type: string
-    x-gomagpie: { css_hint: "h1", trim: true }
+    x-magpie: { css_hint: "h1", trim: true }
   price:
     type: number
-    x-gomagpie:
+    x-magpie:
       css_hint: "span.price"
       coerce: "eur_decimal"
