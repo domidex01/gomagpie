@@ -10,6 +10,7 @@ import (
 
 	"gomagpie/crawl"
 	"gomagpie/extract"
+	"gomagpie/fetch"
 	pluginExec "gomagpie/plugin/exec"
 	"gomagpie/scrape"
 
@@ -55,7 +56,7 @@ func newCrawlCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "comma-separated URL globs to exclude (wins over --include)")
 	cmd.Flags().BoolVar(&allowSubdomains, "allow-subdomains", false, "follow links into subdomains of the seed host")
 	cmd.Flags().BoolVar(&noSitemap, "no-sitemap", false, "skip sitemap seed expansion")
-	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: chrome|firefox|random")
+	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: "+fetch.BrowserHelp)
 	cmd.Flags().Float64Var(&rate, "rate", 1, "per-host requests/sec")
 	cmd.Flags().BoolVar(&ignoreRobots, "ignore-robots", false, "fetch despite robots.txt (prints a warning)")
 	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp)

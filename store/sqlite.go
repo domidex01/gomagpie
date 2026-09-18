@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS run_history (
     fetch_pages       INTEGER NOT NULL DEFAULT 0,
     fetch_bytes       INTEGER NOT NULL DEFAULT 0,
     fetch_ms          INTEGER NOT NULL DEFAULT 0,
+    proxy             TEXT NOT NULL DEFAULT '',
     status            TEXT NOT NULL DEFAULT 'running'
 );
 
@@ -118,12 +119,14 @@ func Open(path string) (*DB, error) {
 	return wdb, nil
 }
 
-// fetchColumns are the Phase D telemetry columns; pre-D database files
-// gain them (zeroed) on open via PRAGMA table_info + ADD COLUMN.
+// fetchColumns are the Phase D telemetry columns plus Phase G's proxy
+// record; pre-D/G database files gain them (zeroed) on open via PRAGMA
+// table_info + ADD COLUMN.
 var fetchColumns = []struct{ name, def string }{
 	{"fetch_pages", "INTEGER NOT NULL DEFAULT 0"},
 	{"fetch_bytes", "INTEGER NOT NULL DEFAULT 0"},
 	{"fetch_ms", "INTEGER NOT NULL DEFAULT 0"},
+	{"proxy", "TEXT NOT NULL DEFAULT ''"},
 }
 
 func (d *DB) migrateRunHistory() error {
@@ -236,14 +239,15 @@ type RunInfo struct {
 	FetchPages       int64
 	FetchBytes       int64
 	FetchMs          int64
+	Proxy            string
 }
 
 // GetRun reads a run_history status row; unknown ids error loudly.
 func (d *DB) GetRun(runID string) (RunInfo, error) {
 	var r RunInfo
-	err := d.db.QueryRow(`SELECT run_id, command, status, pages_ok, pages_err, prompt_tokens, completion_tokens, usd_estimate, fetch_pages, fetch_bytes, fetch_ms FROM run_history WHERE run_id=?`, runID).Scan(
+	err := d.db.QueryRow(`SELECT run_id, command, status, pages_ok, pages_err, prompt_tokens, completion_tokens, usd_estimate, fetch_pages, fetch_bytes, fetch_ms, proxy FROM run_history WHERE run_id=?`, runID).Scan(
 		&r.RunID, &r.Command, &r.Status, &r.PagesOK, &r.PagesErr, &r.PromptTokens, &r.CompletionTokens, &r.USDEstimate,
-		&r.FetchPages, &r.FetchBytes, &r.FetchMs)
+		&r.FetchPages, &r.FetchBytes, &r.FetchMs, &r.Proxy)
 	if err == sql.ErrNoRows {
 		return RunInfo{}, fmt.Errorf("store: unknown run_id %q", runID)
 	}
@@ -260,6 +264,16 @@ func (d *DB) LogFetch(runID string, nBytes, ms int64) error {
 		nBytes, ms, runID)
 	if err != nil {
 		return fmt.Errorf("store: log fetch: %w", err)
+	}
+	return nil
+}
+
+// SetRunProxy records the redacted host:port of the proxy entry that
+// served the run's page (Phase G pool surfacing; empty = direct).
+func (d *DB) SetRunProxy(runID, proxy string) error {
+	_, err := d.db.Exec(`UPDATE run_history SET proxy=? WHERE run_id=?`, proxy, runID)
+	if err != nil {
+		return fmt.Errorf("store: set run proxy: %w", err)
 	}
 	return nil
 }

@@ -3,10 +3,13 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 
 	"gomagpie/clean"
 	"gomagpie/config"
 	"gomagpie/extract"
+	"gomagpie/fetch"
 	"gomagpie/scrape"
 
 	"github.com/spf13/cobra"
@@ -15,7 +18,7 @@ import (
 func newScrapeCmd() *cobra.Command {
 	var schema, render, provider, model, out, format string
 	var noCache bool
-	var pageFormat, headerProfile, cookies, browser string
+	var pageFormat, headerProfile, cookies, browser, viewport string
 	var include, exclude []string
 	var onlyMainContent bool
 	var verticalName string
@@ -29,7 +32,7 @@ func newScrapeCmd() *cobra.Command {
 				Out: out, Format: format, NoCache: noCache,
 				PageFormat: pageFormat, Include: include, Exclude: exclude,
 				OnlyMainContent: onlyMainContent, HeaderProfile: headerProfile, Cookies: cookies,
-				Browser: browser, Vertical: verticalName,
+				Browser: browser, Vertical: verticalName, Viewport: viewport,
 			})
 		},
 	}
@@ -40,13 +43,14 @@ func newScrapeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&out, "out", "", "output path (default stdout)")
 	cmd.Flags().StringVar(&format, "format", "", "json|jsonl (csv|sqlite not supported in Phase 1)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "bypass selector cache")
-	cmd.Flags().StringVar(&pageFormat, "page-format", "", "page output format: markdown|llm|text|json")
+	cmd.Flags().StringVar(&pageFormat, "page-format", "", "page output format: markdown|llm|text|json|html|raw|screenshot")
 	cmd.Flags().StringSliceVar(&include, "include", nil, "comma-separated CSS selectors: scrape only matching subtrees")
 	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "comma-separated CSS selectors: drop matching nodes")
 	cmd.Flags().BoolVar(&onlyMainContent, "only-main-content", false, "main-content only (trafilatura already does this)")
-	cmd.Flags().StringVar(&headerProfile, "header-profile", "", "request header bundle: default|chrome|firefox")
+	cmd.Flags().StringVar(&headerProfile, "header-profile", "", "request header bundle: default|chrome|firefox|safari|edge|ios|chrome_android")
 	cmd.Flags().StringVar(&cookies, "cookies", "", "raw Cookie header value, e.g. \"a=b; c=d\"")
-	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: chrome|firefox|random")
+	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: "+fetch.BrowserHelp)
+	cmd.Flags().StringVar(&viewport, "viewport", "", "screenshot viewport WxH, e.g. 1280x800 (page-format screenshot only)")
 	cmd.Flags().StringVar(&verticalName, "vertical", "", "zero-LLM typed extractor: auto or a name (default off; `magpie vertical --list` in Phase C)")
 	return cmd
 }
@@ -68,6 +72,7 @@ type scrapeOptions struct {
 	HeaderProfile   string
 	Cookies         string
 	Browser         string
+	Viewport        string
 	// Vertical is flag-only (auto|name, default off): validated pre-I/O.
 	Vertical string
 }
@@ -126,10 +131,26 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		PageFormat: o.PageFormat,
 		Scope:      clean.Scope{Include: o.Include, Exclude: o.Exclude, OnlyMainContent: o.OnlyMainContent},
 		Profile:    o.HeaderProfile, Cookies: o.Cookies, Browser: o.Browser,
-		Vertical: o.Vertical,
+		Vertical: o.Vertical, Viewport: o.Viewport,
 	})
 	if err != nil {
 		return keyHint(err) // exitFor owns the code mapping
+	}
+	// Screenshot owns its whole output contract in one place: --out
+	// writes the raw PNG; without it the base64 rides in a JSON envelope
+	// (same shape the MCP tool returns) — never silently dropped.
+	if o.PageFormat == "screenshot" {
+		if cfg.Out != "" {
+			if err := os.WriteFile(cfg.Out, res.ScreenshotPNG, 0o644); err != nil {
+				return fmt.Errorf("write out: %w", err)
+			}
+			return nil
+		}
+		sdoc, merr := screenshotDoc(res)
+		if merr != nil {
+			return merr
+		}
+		return writeOut(cfg.Out, sdoc)
 	}
 	if res.Vertical != "" {
 		vdoc, merr := verticalDoc(res)
@@ -216,6 +237,18 @@ func verticalDoc(r scrape.Result) (string, error) {
 		Vertical string         `json:"vertical"`
 		Record   map[string]any `json:"record"`
 	}{r.URL, r.FinalURL, r.Title, r.Vertical, r.Record}, "scrape")
+}
+
+// screenshotDoc renders the screenshot output when --out is absent: the
+// base64 PNG in content, mirroring the MCP envelope (raw bytes only
+// ever travel via --out).
+func screenshotDoc(r scrape.Result) (string, error) {
+	return marshalOut(struct {
+		URL      string `json:"url"`
+		FinalURL string `json:"final_url"`
+		Format   string `json:"page_format"`
+		Content  string `json:"content"`
+	}{r.URL, r.FinalURL, "screenshot", r.Rendered}, "scrape")
 }
 
 func orEmpty(r json.RawMessage) json.RawMessage {

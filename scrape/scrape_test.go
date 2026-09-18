@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"gomagpie/clean"
 	"gomagpie/crawl"
 	"gomagpie/extract"
+	"gomagpie/fetch"
 	"gomagpie/scrape"
 	"gomagpie/selector"
 	"gomagpie/store"
@@ -357,5 +359,129 @@ func TestScrape_LogFetchCounters(t *testing.T) {
 	}
 	if info.FetchMs < 0 {
 		t.Errorf("fetch_ms = %d, want ≥0", info.FetchMs)
+	}
+}
+
+// --- Phase G: raw/screenshot formats + typed challenge surfacing. ---
+
+// fakeGatedFetcher serves canned bodies (or errors) per URL — unlike the
+// httptest origins this fakes the FETCH seam so ChallengeError and the
+// Proxy field can be injected verbatim.
+type fakeGatedFetcher struct {
+	bodies map[string][]byte
+	errs   map[string]error
+	proxy  string
+}
+
+func (f *fakeGatedFetcher) Fetch(_ context.Context, req fetch.FetchRequest) (*fetch.FetchResponse, error) {
+	if err, ok := f.errs[req.URL]; ok {
+		return nil, err
+	}
+	b, ok := f.bodies[req.URL]
+	if !ok {
+		return nil, fmt.Errorf("fetch: no body for %s", req.URL)
+	}
+	return &fetch.FetchResponse{
+		URL: req.URL, FinalURL: req.URL, StatusCode: 200,
+		HTML: b, Headers: http.Header{}, Proxy: f.proxy,
+	}, nil
+}
+func (f *fakeGatedFetcher) CanHandle(fetch.FetchRequest) bool { return true }
+func (f *fakeGatedFetcher) Close() error                      { return nil }
+
+// TestScrape_Raw: page-format raw returns the decoded body byte-equal —
+// not a markdown rendering of it.
+func TestScrape_Raw(t *testing.T) {
+	raw := "<html><body><p>**not markdown**</p><p>second paragraph of filler for the quality gate to score as prose.</p><p>a third paragraph of honest descriptive words keeps this page rich enough to classify clean.</p></body></html>"
+	url := "https://raw.example/page"
+	db := openScrapeDB(t)
+	d := fakeDeps(db, &fakeExtractor{}, "")
+	d.Fetcher = &fakeGatedFetcher{bodies: map[string][]byte{url: []byte(raw)}}
+	res, err := scrape.Run(t.Context(), d, url, scrape.Options{PageFormat: "raw", Render: "static"})
+	if err != nil {
+		t.Fatalf("Run raw: %v", err)
+	}
+	if res.Rendered != raw {
+		t.Errorf("raw content not byte-equal:\n got %q\nwant %q", res.Rendered, raw)
+	}
+}
+
+// TestScrape_ChallengeRawTyped: a typed challenge never leaks bytes —
+// render=static surfaces the ChallengeError with the vendor named.
+func TestScrape_ChallengeRawTyped(t *testing.T) {
+	url := "https://blocked.example/page"
+	db := openScrapeDB(t)
+	d := fakeDeps(db, &fakeExtractor{}, "")
+	d.Fetcher = &fakeGatedFetcher{errs: map[string]error{url: &fetch.ChallengeError{Vendor: "cloudflare", StatusCode: 403, URL: url}}}
+	_, err := scrape.Run(t.Context(), d, url, scrape.Options{PageFormat: "raw", Render: "static"})
+	var ce *fetch.ChallengeError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %v, want *fetch.ChallengeError", err)
+	}
+	if ce.Vendor != "cloudflare" || !strings.Contains(err.Error(), "cloudflare") {
+		t.Errorf("err = %v, want vendor named", err)
+	}
+}
+
+// TestScrape_ChallengeAutoEscalation: render=auto gets one rod attempt;
+// when the browser can't launch in the sandbox the TYPED error stays
+// primary (launch noise must never mask the vendor).
+func TestScrape_ChallengeAutoEscalation(t *testing.T) {
+	url := "https://blocked.example/auto"
+	db := openScrapeDB(t)
+	d := fakeDeps(db, &fakeExtractor{}, "")
+	d.Fetcher = &fakeGatedFetcher{errs: map[string]error{url: &fetch.ChallengeError{Vendor: "datadome", StatusCode: 200, URL: url}}}
+	_, err := scrape.Run(t.Context(), d, url, scrape.Options{Render: "auto"})
+	var ce *fetch.ChallengeError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %v, want *fetch.ChallengeError", err)
+	}
+	if !strings.Contains(err.Error(), "datadome") {
+		t.Errorf("err = %v, want vendor as primary message", err)
+	}
+}
+
+// TestScrape_ChallengeProxySurfaced: the run row records the redacted
+// proxy that served the page (run_history.proxy contract).
+func TestScrape_ChallengeProxySurfaced(t *testing.T) {
+	url := "https://proxied.example/page"
+	db := openScrapeDB(t)
+	d := fakeDeps(db, &fakeExtractor{}, "")
+	d.Fetcher = &fakeGatedFetcher{bodies: map[string][]byte{url: []byte(scrapeHTML)}, proxy: "10.0.0.9:3128"}
+	res, err := scrape.Run(t.Context(), d, url, scrape.Options{Render: "static"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := db.GetRun(res.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Proxy != "10.0.0.9:3128" {
+		t.Errorf("run_history.proxy = %q, want 10.0.0.9:3128", info.Proxy)
+	}
+}
+
+// TestScrape_ScreenshotValidation: screenshot+static is a pre-I/O
+// OptionsError (exit 2); the PNG bytes themselves are browser-tier.
+func TestScrape_ScreenshotValidation(t *testing.T) {
+	err := scrape.ValidateOptions(scrape.Options{PageFormat: "screenshot", Render: "static"})
+	var oe *scrape.OptionsError
+	if !errors.As(err, &oe) {
+		t.Fatalf("err = %v, want *OptionsError", err)
+	}
+	for _, want := range []string{"screenshot", "static"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want it to name %q", err, want)
+		}
+	}
+	// auto (default) and browser renders are accepted.
+	if err := scrape.ValidateOptions(scrape.Options{PageFormat: "screenshot"}); err != nil {
+		t.Errorf("screenshot+auto: %v", err)
+	}
+	// Run with the conflict fails before any I/O (nil DB must NOT win —
+	// validation precedes it for format/render combos via Run order).
+	_, err = scrape.Run(t.Context(), scrape.Deps{DB: openScrapeDB(t)}, "https://example.com", scrape.Options{PageFormat: "screenshot", Render: "static"})
+	if !errors.As(err, &oe) {
+		t.Errorf("Run err = %v, want OptionsError", err)
 	}
 }

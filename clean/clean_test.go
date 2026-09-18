@@ -139,3 +139,49 @@ func TestTokenCap(t *testing.T) {
 		t.Errorf("markdown exceeds 8k tokens: %d chars", len(got.Markdown))
 	}
 }
+
+// --- Phase G G.4: CleanedPage.HTML — scoped serialization, additive. ---
+
+// TestClean_HTMLField: HTML carries the cleaned (scope-applied) document;
+// excluded subtrees are gone before serialization; PDF pages have none.
+func TestClean_HTMLField(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "clean", "article.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := clean.Clean(t.Context(), clean.RawPage{HTML: raw, FinalURL: "https://example.com/a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HTML == "" {
+		t.Fatal("HTML field empty — html page-format would render nothing")
+	}
+	// Markdown goldens must not drift from the additive field.
+	md, err := clean.Clean(t.Context(), clean.RawPage{HTML: raw, FinalURL: "https://example.com/a"})
+	if err != nil || md.Markdown == "" {
+		t.Fatalf("markdown unchanged check: %v", err)
+	}
+
+	// Scoping applies to HTML: exclude the nav, it disappears from HTML
+	// but the page still cleans.
+	scopedHTML := `<html><head><title>Scoped</title></head><body>
+		<nav><a href="/x">navlink</a></nav>
+		<article><p>` + strings.Repeat("substantial article prose for the cleaner to score happily. ", 30) + `</p></article>
+		</body></html>`
+	got2, err := clean.Clean(t.Context(), clean.RawPage{
+		HTML: []byte(scopedHTML), FinalURL: "https://example.com/s",
+		Scope: clean.Scope{Exclude: []string{"nav"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got2.HTML, "navlink") {
+		t.Error("excluded <nav> must be absent from CleanedPage.HTML (scope before serialization)")
+	}
+	if !strings.Contains(got2.HTML, "substantial article prose") {
+		t.Error("main content must survive scoping in HTML")
+	}
+
+	// PDF branch produces no HTML (cleanPDF never sets the field — the
+	// Render <article> wrapper for empty-HTML pages is pinned in llm_test).
+}

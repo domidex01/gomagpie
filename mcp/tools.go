@@ -31,12 +31,12 @@ type ScrapeIn struct {
 	Schema          FlexMap    `json:"schema,omitempty" jsonschema:"JSON Schema object; omit for cleaned markdown only"`
 	Render          string     `json:"render,omitempty" jsonschema:"auto, static, or browser"`
 	UseCache        *FlexBool  `json:"use_cache,omitempty" jsonschema:"apply cached selectors when available"`
-	PageFormat      string     `json:"page_format,omitempty" jsonschema:"page output format: markdown, llm, text, or json"`
+	PageFormat      string     `json:"page_format,omitempty" jsonschema:"page output format: markdown, llm, text, json, html, raw, or screenshot"`
 	Include         StringList `json:"include,omitempty" jsonschema:"CSS selectors: scrape only matching subtrees"`
 	Exclude         StringList `json:"exclude,omitempty" jsonschema:"CSS selectors: drop matching nodes"`
 	OnlyMainContent *FlexBool  `json:"only_main_content,omitempty" jsonschema:"main-content only"`
-	Profile         string     `json:"profile,omitempty" jsonschema:"header profile: default, chrome, or firefox"`
-	Browser         string     `json:"browser,omitempty" jsonschema:"TLS-impersonating browser fingerprint: chrome, firefox, or random"`
+	Profile         string     `json:"profile,omitempty" jsonschema:"header profile: default, chrome, firefox, safari, edge, ios, or chrome_android"`
+	Browser         string     `json:"browser,omitempty" jsonschema:"TLS-impersonating browser fingerprint: chrome, firefox, safari, edge, ios, chrome_android, or random"`
 	Cookies         string     `json:"cookies,omitempty" jsonschema:"raw Cookie header value"`
 }
 
@@ -118,7 +118,7 @@ type CrawlIn struct {
 	Exclude         StringList `json:"exclude,omitempty" jsonschema:"URL globs to exclude (wins over include)"`
 	AllowSubdomains *FlexBool  `json:"allow_subdomains,omitempty" jsonschema:"follow links into subdomains of the seed host"`
 	NoSitemap       *FlexBool  `json:"no_sitemap,omitempty" jsonschema:"skip sitemap seed expansion"`
-	Browser         string     `json:"browser,omitempty" jsonschema:"TLS-impersonating browser fingerprint: chrome, firefox, or random"`
+	Browser         string     `json:"browser,omitempty" jsonschema:"TLS-impersonating browser fingerprint: chrome, firefox, safari, edge, ios, chrome_android, or random"`
 	Schema          FlexMap    `json:"schema,omitempty" jsonschema:"JSON Schema object for extraction"`
 	RunID           string     `json:"run_id,omitempty" jsonschema:"poll a previous run instead of crawling"`
 }

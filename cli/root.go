@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	cfgFile string
-	cacheDB string
-	maxCost float64
-	apiKey  string
+	cfgFile   string
+	cacheDB   string
+	maxCost   float64
+	apiKey    string
+	proxyFile string
 )
 
 // Execute runs the magpie command tree and returns the process exit code.
@@ -37,6 +38,13 @@ func rootCmd() *cobra.Command {
 		Use:   "magpie",
 		Short: "Fetch → clean → extract structured data from the web",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// ponytail: the env is the real config surface; the flag is
+			// sugar so GUI/docs don't need env plumbing.
+			if proxyFile != "" {
+				if err := os.Setenv("GOMAGPIE_PROXY_FILE", proxyFile); err != nil {
+					return fmt.Errorf("set GOMAGPIE_PROXY_FILE: %w", err)
+				}
+			}
 			return nil
 		},
 		SilenceUsage: true,
@@ -45,8 +53,9 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&cacheDB, "cache-db", "", "SQLite cache DB path")
 	root.PersistentFlags().Float64Var(&maxCost, "max-cost", 0, "USD cost ceiling (abort before exceeding; flat-rate providers codex, opencode-go exempt)")
 	root.PersistentFlags().StringVar(&apiKey, "api-key", "", "provider API key (overrides env/keyring)")
+	root.PersistentFlags().StringVar(&proxyFile, "proxy-file", "", "proxy pool file: one URL (http|https|socks5) or host:port:user:pass per line; # comments (overrides GOMAGPIE_PROXY)")
 	root.AddCommand(newScrapeCmd(), newExtractCmd(), newConfigCmd(), newCrawlCmd(), newCacheCmd(), newServeCmd(), newBuildCmd(),
-		newBatchCmd(), newMapCmd(), newSummarizeCmd(), newDiffCmd(), newBrandCmd(), newVerticalCmd())
+		newBatchCmd(), newMapCmd(), newSummarizeCmd(), newDiffCmd(), newBrandCmd(), newVerticalCmd(), newSearchCmd())
 	return root
 }
 
@@ -87,11 +96,16 @@ func exitCode(err error) int {
 	}
 	code := 1
 	var oe *scrape.OptionsError
+	var che *fetch.ChallengeError
 	switch {
 	case errors.As(err, &oe):
 		code = 2
 	case errors.Is(err, scrape.ErrMissingKey):
 		code = 7
+	case errors.As(err, &che):
+		// A surviving bot challenge is a page-usability failure, grouped
+		// with quality blocks (fetch couldn't produce scrapable content).
+		code = 8
 	case errors.Is(err, crawl.ErrCostCeiling):
 		code = 6
 	case errors.Is(err, clean.ErrQuality):
@@ -100,6 +114,7 @@ func exitCode(err error) int {
 		code = 5
 	case errors.Is(err, vertical.ErrURLMismatch),
 		errors.Is(err, fetch.ErrPrivateAddress),
+		errors.Is(err, fetch.ErrProxyConfig),
 		errors.Is(err, crawl.ErrBadScope):
 		code = 2
 	}

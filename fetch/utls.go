@@ -13,40 +13,47 @@ import (
 	impersonate "github.com/North-web-dev/impersonate-http"
 )
 
+// browserNames is the rotation pool for "random" — every profile the
+// library ships (chrome_android rides HelloChrome_Auto with a mobile UA).
+var browserNames = []string{"chrome", "chrome_android", "firefox", "safari", "edge", "ios"}
+
+// BrowserHelp is the canonical --browser value list, shared by every
+// help text and error message so the union can't drift per surface.
+const BrowserHelp = "chrome|firefox|safari|edge|ios|chrome_android|random"
+
 // randomBrowser resolves "random" exactly once per process — flipping
 // hello mid-run would look like a fingerprint anomaly. ponytail:
 // per-request rotation is the upgrade path if ever needed.
 var randomBrowser = sync.OnceValue(func() string {
 	var b [1]byte
-	if _, err := rand.Read(b[:]); err != nil || b[0]%2 == 0 {
+	if _, err := rand.Read(b[:]); err != nil {
 		return "chrome"
 	}
-	return "firefox"
+	return browserNames[int(b[0])%len(browserNames)]
 })
 
 // ValidBrowser reports whether name is an accepted --browser value
-// (the same literal set resolveBrowser executes). Validation lives here
-// so scrape, crawl, batch, and the CLI edges can't drift apart.
+// (the same set resolveBrowser executes). The library's Profiles map is
+// the source of truth, so a library bump can't drift the union.
 func ValidBrowser(name string) bool {
-	switch name {
-	case "", "chrome", "firefox", "random":
+	if name == "" || name == "random" {
 		return true
 	}
-	return false
+	_, ok := impersonate.Profiles[name]
+	return ok
 }
 
 // resolveBrowser maps a Browser option to an impersonate profile. The
-// accepted set is exactly chrome|firefox|random; anything else fails so
-// typos never silently fall back to a stock fingerprint.
+// accepted set is exactly the library's Profiles keys plus "random";
+// anything else fails so typos never silently fall back to a stock
+// fingerprint.
 func resolveBrowser(name string) (impersonate.Profile, bool) {
-	switch name {
-	case "chrome", "firefox":
-		return impersonate.Profiles[name], true
-	case "random":
+	if name == "random" {
 		p, _ := impersonate.Profiles[randomBrowser()]
 		return p, true
 	}
-	return impersonate.Profile{}, false
+	p, ok := impersonate.Profiles[name]
+	return p, ok
 }
 
 // browserClients caches one impersonating http.Client per resolved
@@ -68,7 +75,7 @@ func (s *StaticFetcher) browserClient(name string) (*http.Client, error) {
 	}
 	p, ok := resolveBrowser(name)
 	if !ok {
-		return nil, fmt.Errorf("fetch: browser %q must be chrome|firefox|random", name)
+		return nil, fmt.Errorf("fetch: browser %q must be %s", name, BrowserHelp)
 	}
 	c := &http.Client{
 		Transport:     impersonate.NewTransport(p, impersonate.WithDialer(browserDial(s.ssrf))),

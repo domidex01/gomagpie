@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"gomagpie/scrape"
 	"gomagpie/store"
 )
 
@@ -393,5 +394,26 @@ func TestScrape_VerticalHelp(t *testing.T) {
 	}
 	if !strings.Contains(usage, "default off") {
 		t.Errorf("scrape usage lacks default-off note:\n%s", usage)
+	}
+}
+
+// TestScrape_ScreenshotDoc: without --out the screenshot must surface
+// the base64 PNG in a JSON envelope (content field) — regression for
+// the silent-drop bug where the base64 never reached any output.
+func TestScrape_ScreenshotDoc(t *testing.T) {
+	png := "iVBORw0KGgo" // PNG magic, base64-shaped; no capture needed
+	doc, err := screenshotDoc(scrape.Result{URL: "https://x", FinalURL: "https://x", Rendered: png})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env map[string]string
+	if err := json.Unmarshal([]byte(doc), &env); err != nil {
+		t.Fatalf("envelope not JSON: %v", doc)
+	}
+	if env["content"] != png {
+		t.Errorf("content = %q, want the base64 PNG", env["content"])
+	}
+	if env["page_format"] != "screenshot" {
+		t.Errorf("page_format = %q, want screenshot", env["page_format"])
 	}
 }

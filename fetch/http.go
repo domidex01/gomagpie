@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -41,6 +42,15 @@ func GuardedTransport() *http.Transport {
 	return guardedTransport(resolvedSSRFOptions())
 }
 
+// GuardedTransportWithOptions builds the same transport with explicit
+// SSRF options — for clients whose PEER is entirely operator-configured
+// (e.g. the search provider registry + GOMAGPIE_SEARXNG_URL), where a
+// localhost/LAN endpoint is the legitimate deployment shape. Targets
+// from untrusted input never go through such a client.
+func GuardedTransportWithOptions(o SSRFOptions) *http.Transport {
+	return guardedTransport(o)
+}
+
 func guardedTransport(o SSRFOptions) *http.Transport {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	transport := &http.Transport{
@@ -67,12 +77,18 @@ func guardedDialFunc(o SSRFOptions, dialer *net.Dialer) func(ctx context.Context
 		if err != nil {
 			return nil, err
 		}
-		// GOMAGPIE_PROXY set → this peer is the operator-configured
-		// proxy (trusted egress, often localhost/internal), not the
-		// SSRF target: the policy applies to target URLs via
-		// ValidateURL + CheckRedirect, and NO_PROXY-exempt hosts are
-		// equally operator-chosen (curl semantics).
-		proxied := os.Getenv("GOMAGPIE_PROXY") != ""
+		// Operator-configured egress (GOMAGPIE_PROXY / proxy pool) →
+		// this peer is the chosen proxy (trusted, often localhost),
+		// not the SSRF target: the policy applies to target URLs via
+		// ValidateURL + CheckRedirect. The decision is per dial-addr:
+		// proxied requests dial the proxy host (trusted), direct
+		// requests dial the target (peer-checked, and NO_PROXY-exempt
+		// targets resolve to nil here — safe default).
+		host := addr
+		if h, _, serr := net.SplitHostPort(addr); serr == nil {
+			host = h
+		}
+		proxied := proxiedForHost(host)
 		if !dialPeerAllowed(conn.RemoteAddr(), o, proxied) {
 			_ = conn.Close() //nolint:errcheck // rejection path; close error unactionable
 			return nil, ssrfErr("fetch: dial peer %s is not a public address (DNS rebind?)", conn.RemoteAddr())
@@ -105,29 +121,19 @@ func addrIP(addr net.Addr) (netip.Addr, bool) {
 	return a, ok
 }
 
-// proxyFunc resolves the proxy per request: GOMAGPIE_PROXY (http(s) URL,
-// validated loudly) wins over the standard HTTP(S)_PROXY environment,
+// proxyFunc resolves the proxy per request: the pool (GOMAGPIE_PROXY_FILE,
+// then GOMAGPIE_PROXY) wins over the standard HTTP(S)_PROXY environment,
 // with a minimal NO_PROXY exact/dot-suffix bypass. Read per request so
-// env changes take effect without rebuilding the transport.
+// env changes take effect without rebuilding the transport. The chosen
+// pick is recorded for the failover loop and response surfacing.
 func proxyFunc(req *http.Request) (*url.URL, error) {
-	return proxyForHost(req.URL.Hostname())
-}
-
-// proxyForHost is proxyFunc keyed by bare hostname — the browser dial
-// needs the tunnel decision before any URL object exists.
-func proxyForHost(hostname string) (*url.URL, error) {
-	if v := strings.TrimSpace(os.Getenv("GOMAGPIE_PROXY")); v != "" {
-		u, err := url.Parse(v)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return nil, fmt.Errorf("fetch: bad GOMAGPIE_PROXY %q: want http(s)://host:port", v)
+	u, p, idx, err := proxyForHostPick(req.URL.Hostname())
+	if err == nil && p != nil {
+		if ref := pickRefFrom(req.Context()); ref != nil {
+			ref.set(p, idx, u)
 		}
-		if noProxyMatch(hostname) {
-			return nil, nil
-		}
-		return u, nil
 	}
-	req := &http.Request{URL: &url.URL{Scheme: "https", Host: hostname}}
-	return http.ProxyFromEnvironment(req)
+	return u, err
 }
 
 // noProxyMatch: comma-separated NO_PROXY entries, exact or dot-suffix
@@ -171,32 +177,85 @@ func (s *StaticFetcher) Close() error {
 	return nil
 }
 
-// Fetch performs one GET with a per-attempt timeout budget. On a
-// challenge-classified response with a non-empty profile, it warms the
-// cookie jar with one homepage GET then retries the original URL exactly
-// once, returning whatever arrives (success or final failure — no loops).
+// Fetch performs one GET with a per-attempt timeout budget, wrapped in
+// the proxy-pool failover loop (dial/CONNECT/timeout errors rotate to the
+// next entry; HTTP statuses are page outcomes, never proxy failures). On
+// a challenge response it warms the cookie jar with one homepage GET then
+// retries the original URL exactly once. A typed challenge that survives
+// the retry becomes *ChallengeError; untyped challenge bodies pass
+// through to the quality gate as before (no loops).
 func (s *StaticFetcher) Fetch(ctx context.Context, req FetchRequest) (*FetchResponse, error) {
 	if req.URL == "" {
 		return nil, fmt.Errorf("fetch: empty URL")
 	}
-	resp, err := s.do(ctx, req)
+	resp, err := s.doWithFailover(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	// Warmup fires for profiles AND browser fingerprints: --browser
-	// requests are exactly the blocked-page case, so gating on Profile
-	// alone would make --browser useless against the sites it exists for.
-	if req.Profile == "" && req.Browser == "" || !IsChallengePage(resp.HTML, resp.StatusCode) {
+	vendor := DetectChallenge(resp.HTML, resp.Headers, resp.StatusCode)
+	classified := vendor != "" || IsChallengePage(resp.HTML, resp.StatusCode)
+	// Warmup fires for profiles, browser fingerprints, AND typed
+	// challenges: --browser requests and vendor-verified challenge pages
+	// are exactly the blocked-page case. Untyped challenge bodies on a
+	// bare request keep the old passthrough contract (quality gate owns
+	// them); clean pages never warm up.
+	impersonated := req.Profile != "" || req.Browser != "" || vendor != ""
+	if !classified || !impersonated {
 		return resp, nil
 	}
 	if home := homepageOf(req.URL); home != "" {
 		_, _ = s.do(ctx, FetchRequest{URL: home, Timeout: req.Timeout, Profile: req.Profile, Cookies: req.Cookies, Browser: req.Browser}) //nolint:errcheck // warmup best-effort; retry proceeds regardless
 	}
+	// The retry is a single attempt by design: it is already the second
+	// chance after a response arrived, so egress failover does not apply.
 	retry, rerr := s.do(ctx, req)
 	if rerr != nil {
 		return nil, rerr
 	}
+	if v := DetectChallenge(retry.HTML, retry.Headers, retry.StatusCode); v != "" {
+		return nil, &ChallengeError{Vendor: v, StatusCode: retry.StatusCode, URL: req.URL}
+	}
 	return retry, nil
+}
+
+// doWithFailover wraps one attempt in the pool retry loop: at most
+// min(3, pool size) attempts, and only on egress-shaped errors. ponytail:
+// a caller-canceled ctx fails all attempts fast, so no separate cancel
+// check — the bounded loop is the ceiling.
+func (s *StaticFetcher) doWithFailover(ctx context.Context, req FetchRequest) (*FetchResponse, error) {
+	attempts := 1
+	if p, err := currentPool(); err == nil && p != nil {
+		attempts = min(3, len(p.entries))
+	}
+	var resp *FetchResponse
+	var err error
+	for i := 0; ; i++ {
+		ref := &pickRef{}
+		resp, err = s.do(context.WithValue(ctx, pickKey{}, ref), req)
+		if err != nil && isEgressError(err) {
+			if p, idx, _ := ref.chosen(); p != nil {
+				p.reportFailure(idx)
+			}
+		}
+		if err == nil || i+1 >= attempts || !isEgressError(err) {
+			return resp, err
+		}
+	}
+}
+
+// isEgressError reports whether err looks like a dial/CONNECT/timeout
+// failure (proxy rotation is worth a retry) rather than a page outcome.
+func isEgressError(err error) bool {
+	var oe *net.OpError
+	if errors.As(err, &oe) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "proxyconnect") || strings.Contains(msg, "socks connect")
 }
 
 func (s *StaticFetcher) do(ctx context.Context, req FetchRequest) (*FetchResponse, error) {
@@ -210,6 +269,14 @@ func (s *StaticFetcher) do(ctx context.Context, req FetchRequest) (*FetchRespons
 	timeout := budget(req)
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// Reuse a caller-injected pickRef (doWithFailover) so failed picks are
+	// reported and successes surface the serving entry; create one only
+	// for bare do() calls (warmup, smoke tests).
+	ref := pickRefFrom(ctx)
+	if ref == nil {
+		ref = &pickRef{}
+		cctx = context.WithValue(cctx, pickKey{}, ref)
+	}
 	client, err := s.clientFor(req)
 	if err != nil {
 		return nil, err
@@ -265,11 +332,15 @@ func (s *StaticFetcher) do(ctx context.Context, req FetchRequest) (*FetchRespons
 	if resp.Request != nil && resp.Request.URL != nil {
 		finalURL = resp.Request.URL.String()
 	}
-	return &FetchResponse{
+	out := &FetchResponse{
 		URL:        req.URL,
 		FinalURL:   finalURL,
 		StatusCode: resp.StatusCode,
 		HTML:       body,
 		Headers:    resp.Header,
-	}, nil
+	}
+	if _, _, u := ref.chosen(); u != nil {
+		out.Proxy = RedactProxy(u)
+	}
+	return out, nil
 }

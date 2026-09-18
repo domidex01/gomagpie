@@ -1,0 +1,2 @@
+// recorded 2026-09-18 from https://serpapi.com/search-api (response shape)
+{"organic_results":[{"position":1,"title":"SerpAPI top hit","link":"https://example.com/top","snippet":"The top organic result."},{"position":2,"title":"SerpAPI second","link":"https://example.io/second","snippet":"Runner-up."}]}

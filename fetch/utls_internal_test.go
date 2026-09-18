@@ -21,6 +21,8 @@ import (
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
+
+	impersonate "github.com/North-web-dev/impersonate-http"
 )
 
 func compressed(t *testing.T, enc string, data []byte) []byte {
@@ -100,12 +102,22 @@ func TestDecodeBody_Cap(t *testing.T) {
 }
 
 func TestResolveBrowser(t *testing.T) {
-	for _, name := range []string{"chrome", "firefox", "random"} {
-		if _, ok := resolveBrowser(name); !ok {
+	// G.3: every library profile name resolves, and maps to the right
+	// ClientHelloID (drift-proof against a library bump in either direction).
+	for _, name := range []string{"chrome", "chrome_android", "firefox", "safari", "edge", "ios", "random"} {
+		p, ok := resolveBrowser(name)
+		if !ok {
 			t.Errorf("resolveBrowser(%q) not ok", name)
+			continue
+		}
+		if name == "random" {
+			continue
+		}
+		if p.ClientHello != impersonate.Profiles[name].ClientHello {
+			t.Errorf("resolveBrowser(%q) ClientHello = %v, want the library profile's", name, p.ClientHello)
 		}
 	}
-	for _, name := range []string{"safari", "edge", "ios", "Chrome", ""} {
+	for _, name := range []string{"Chrome", "webkit", "opera", ""} {
 		if _, ok := resolveBrowser(name); ok {
 			t.Errorf("resolveBrowser(%q) ok, want rejection (fail loud on typos)", name)
 		}
@@ -115,8 +127,10 @@ func TestResolveBrowser(t *testing.T) {
 	if r1.Name != r2.Name {
 		t.Errorf("random resolved %q then %q — must resolve once per process", r1.Name, r2.Name)
 	}
-	if r1.Name != "chrome" && r1.Name != "firefox" {
-		t.Errorf("random resolved %q, want chrome|firefox", r1.Name)
+	// Membership, not distribution: random spans all six profiles.
+	valid := map[string]bool{"chrome": true, "chrome_android": true, "firefox": true, "safari": true, "edge": true, "ios": true}
+	if !valid[r1.Name] {
+		t.Errorf("random resolved %q, want one of the six library profiles", r1.Name)
 	}
 }
 
@@ -140,8 +154,18 @@ func TestBrowserClientCacheAndValidation(t *testing.T) {
 	if cf == c1 {
 		t.Error("firefox and chrome share one client — fingerprints would bleed")
 	}
-	if _, err := f.browserClient("safari"); err == nil {
-		t.Error("safari must fail loud (accepted set is chrome|firefox|random)")
+	cs, err := f.browserClient("safari") // G.3: safari is now a valid profile
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cs == c1 {
+		t.Error("safari and chrome share one client — fingerprints would bleed")
+	}
+	if c2, serr := f.browserClient("safari"); serr != nil || c2 != cs {
+		t.Error("safari client not cached — connections would not pool")
+	}
+	if _, err := f.browserClient("webkit"); err == nil {
+		t.Error("webkit must fail loud (accepted set is " + BrowserHelp + ")")
 	}
 }
 

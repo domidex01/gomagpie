@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	impersonate "github.com/North-web-dev/impersonate-http"
+
 	"gomagpie/fetch"
 )
 
@@ -81,8 +83,20 @@ func TestBrowserStrictPreDial(t *testing.T) {
 	// from resolveBrowser (a strict fetcher would reject the private URL
 	// even earlier — also correct, also pre-dial).
 	relaxed := relaxedFetcher(t)
-	_, err = relaxed.Fetch(t.Context(), fetch.FetchRequest{URL: "https://127.0.0.1:1/", Browser: "safari"})
-	if err == nil || !strings.Contains(err.Error(), "chrome|firefox|random") {
-		t.Errorf("Fetch(browser=safari) = %v, want allowed-values error", err)
+	_, err = relaxed.Fetch(t.Context(), fetch.FetchRequest{URL: "https://127.0.0.1:1/", Browser: "webkit"})
+	if err == nil || !strings.Contains(err.Error(), "chrome|firefox|safari|edge|ios|chrome_android|random") {
+		t.Errorf("Fetch(browser=webkit) = %v, want allowed-values error", err)
+	}
+}
+
+// TestProfiles_IOSWireUA (Phase G G.3): the new ios header profile rides
+// the cleartext path (stock client + header bundle), so the origin sees
+// the library's iPhone UA.
+func TestProfiles_IOSWireUA(t *testing.T) {
+	srv := echoOrigin(t)
+	body := fetchBody(t, srv.URL, fetch.FetchRequest{Profile: "ios"})
+	want := impersonate.Profiles["ios"].Headers.Get("User-Agent")
+	if !strings.Contains(body, want) {
+		t.Errorf("wire UA = %q, want the ios profile UA %q", body, want)
 	}
 }

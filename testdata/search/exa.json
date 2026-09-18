@@ -1,0 +1,2 @@
+// recorded 2026-09-18 from https://docs.exa.ai/reference/search (response shape)
+{"results":[{"title":"Exa neural search","url":"https://exa.example/neural","text":"Neural search result text."},{"title":"Exa second","url":"https://exa.example/two","text":"Second result text."}]}

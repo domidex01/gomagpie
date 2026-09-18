@@ -1,0 +1,2 @@
+// recorded 2026-09-18 from https://api-dashboard.search.brave.com/app/documentation/web-search (response shape)
+{"web":{"results":[{"title":"Go Web Scraping Guide","url":"https://example.com/guide","description":"The complete guide to scraping with Go."},{"title":"Scraping at scale","url":"https://example.org/scale","description":"Techniques for large crawls."}]}}

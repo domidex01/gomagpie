@@ -1,0 +1,2 @@
+// recorded 2026-09-18 from https://docs.searxng.org (JSON format shape)
+{"results":[{"title":"SearXNG self-hosting","url":"https://searx.example/self","content":"Run your own meta search engine."},{"title":"Zero-key search","url":"https://searx.example/zero","content":"No API key required."}]}
