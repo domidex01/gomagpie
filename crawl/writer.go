@@ -18,6 +18,7 @@ import (
 // ceiling = large crawls must use jsonl).
 type writer struct {
 	format   string
+	corpus   bool
 	out      *os.File
 	enc      *json.Encoder
 	csvW     *csv.Writer
@@ -30,8 +31,8 @@ type writer struct {
 	closeOut bool
 }
 
-func newWriter(outPath, format string, sch *extract.Schema, db *store.DB, runID string) (*writer, error) {
-	w := &writer{format: format, db: db, runID: runID}
+func newWriter(outPath, format string, sch *extract.Schema, db *store.DB, runID string, corpus bool) (*writer, error) {
+	w := &writer{format: format, db: db, runID: runID, corpus: corpus}
 	if outPath == "" {
 		w.out = os.Stdout
 	} else {
@@ -89,10 +90,14 @@ func csvColumns(sch *extract.Schema) []string {
 	return append(required, rest...)
 }
 
-// jsonRecord is the single home for the JSON envelope: the writer encodes
+// record is the single home for the JSON envelope: the writer encodes
 // exactly this, and the sink hands the same object to OnRecord (exporter
-// tee), so the two streams can never drift apart in shape.
-func jsonRecord(r core.PageResult) map[string]any {
+// tee), so the two streams can never drift apart in shape. Corpus mode
+// emits {url,title,depth,markdown}; extracted mode {url,extracted}.
+func (w *writer) record(r core.PageResult) map[string]any {
+	if w.corpus {
+		return map[string]any{"url": r.Task.URL, "title": r.Title, "depth": r.Task.Depth, "markdown": r.Text}
+	}
 	return map[string]any{"url": r.Task.URL, "extracted": r.Record}
 }
 
@@ -100,13 +105,13 @@ func (w *writer) write(r core.PageResult) error {
 	url := r.Task.URL
 	switch w.format {
 	case "jsonl":
-		if err := w.enc.Encode(jsonRecord(r)); err != nil {
+		if err := w.enc.Encode(w.record(r)); err != nil {
 			return fmt.Errorf("crawl: jsonl encode: %w", err)
 		}
 		w.n++
 		return nil
 	case "json":
-		w.buf = append(w.buf, jsonRecord(r))
+		w.buf = append(w.buf, w.record(r))
 		w.n++
 		return nil
 	case "csv":

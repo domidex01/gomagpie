@@ -39,8 +39,12 @@ type Cleaned struct {
 type PageResult struct {
 	Task   FetchTask
 	Record map[string]any
-	Links  []string
-	Err    error
+	// Corpus mode only: cleaned page title + markdown. Plain fields — the
+	// struct is never marshaled directly; (*crawl.writer).record reads them.
+	Title string
+	Text  string
+	Links []string
+	Err   error
 }
 
 // PipelineConfig bounds per-stage concurrency.

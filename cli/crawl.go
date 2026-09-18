@@ -13,6 +13,7 @@ import (
 	"magpie/fetch"
 	pluginExec "magpie/plugin/exec"
 	"magpie/scrape"
+	"magpie/selector"
 
 	"github.com/spf13/cobra"
 )
@@ -28,6 +29,7 @@ func newCrawlCmd() *cobra.Command {
 	var include, exclude []string
 	var allowSubdomains, noSitemap bool
 	var browser, lang string
+	var corpus bool
 	cmd := &cobra.Command{
 		Use:   "crawl <url>",
 		Short: "BFS crawl + extract a site",
@@ -54,11 +56,12 @@ func newCrawlCmd() *cobra.Command {
 				Provider: provider, Model: model, ExporterCmd: exporterCmd,
 				PathPrefix: pathPrefix, Include: include, Exclude: exclude,
 				AllowSubdomains: allowSubdomains, NoSitemap: noSitemap, Browser: browser,
-				Lang: lang,
+				Lang: lang, Corpus: corpus,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&schema, "schema", "", "JSON Schema file (yaml/json, required)")
+	cmd.Flags().StringVar(&schema, "schema", "", "JSON Schema file (yaml/json, required unless --corpus)")
+	cmd.Flags().BoolVar(&corpus, "corpus", false, "schema-less corpus mode: one {url,title,depth,markdown} JSONL record per page with cleaned main-content text; zero LLM calls, no API key (jsonl only; mutually exclusive with --schema)")
 	cmd.Flags().StringVar(&format, "format", "jsonl", "jsonl|json|csv|sqlite")
 	cmd.Flags().StringVar(&out, "out", "", "output path (default stdout)")
 	cmd.Flags().StringVar(&resume, "resume", "", "resume a checkpointed run_id")
@@ -97,6 +100,7 @@ type crawlCLIOptions struct {
 	Provider     string
 	Model        string
 	ExporterCmd  string
+	Corpus       bool
 	// Scope bounds; validated inside crawl.Run pre-I/O (ErrBadScope → exit 2).
 	PathPrefix      string
 	Include         []string
@@ -169,7 +173,15 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	if o.Out != "" {
 		cfg.Out = o.Out
 	}
-	if cfg.Schema == "" {
+	if o.Corpus {
+		if cfg.Schema != "" {
+			return fail(2, "crawl: --corpus and --schema are mutually exclusive")
+		}
+		if cfg.Format != "" && cfg.Format != "jsonl" {
+			return fail(2, "crawl: corpus mode requires --format jsonl")
+		}
+		cfg.Format = "jsonl"
+	} else if cfg.Schema == "" {
 		return fail(2, "crawl: --schema is required")
 	}
 	switch cfg.Format {
@@ -185,13 +197,22 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	if o.Model != "" {
 		model = o.Model
 	}
-	key := cfg.APIKey(provider)
-	if key == "" && needsAPIKey(provider) {
-		return missingKeyErr(provider)
-	}
-	sch, err := extract.LoadSchema(cfg.Schema)
-	if err != nil {
-		return err
+	// Corpus mode is keyless: no schema load, no provider/API-key resolution,
+	// no extractor wiring — Run gets Extractor/Propose nil and never calls them.
+	var key string
+	var sch *extract.Schema
+	var ex extract.Extractor
+	var propose selector.ProposeFunc
+	if !o.Corpus {
+		key = cfg.APIKey(provider)
+		if key == "" && needsAPIKey(provider) {
+			return missingKeyErr(provider)
+		}
+		var lerr error
+		sch, lerr = extract.LoadSchema(cfg.Schema)
+		if lerr != nil {
+			return lerr
+		}
 	}
 	if o.ExporterCmd != "" {
 		cfg.ExporterCmd = o.ExporterCmd
@@ -215,47 +236,49 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	if !resuming {
 		runID = uuidNew()
 	}
-	ex, err := newExtractor(provider, key, model, sch, db, runID)
-	if err != nil {
-		return err
-	}
-	propose := func(pctx context.Context, fields []string, trimmed string) (map[string]string, error) {
-		props := map[string]any{}
-		for _, f := range fields {
-			props[f] = map[string]any{"type": "string"}
-		}
-		raw, merr := json.Marshal(map[string]any{
-			"type": "object", "properties": props,
-			"required": fields, "additionalProperties": false,
-		})
-		if merr != nil {
-			return nil, merr
-		}
-		asch, merr := extract.ParseSchema(raw)
-		if merr != nil {
-			return nil, merr
-		}
-		pex, err := newExtractor(provider, key, model, asch, db, runID)
+	if !o.Corpus {
+		ex, err = newExtractor(provider, key, model, sch, db, runID)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if cerr := checkCostCeiling(db, runID, provider, model, trimmed, cfg.MaxCost); cerr != nil {
-			return nil, cerr
-		}
-		res, xerr := pex.Extract(pctx, extract.ExtractInput{
-			Markdown: "Propose one CSS selector per required field that extracts its value from the page below.\n\n" + trimmed,
-			Schema:   asch, Purpose: "synth",
-		})
-		if xerr != nil {
-			return nil, xerr
-		}
-		out := map[string]string{}
-		for _, f := range fields {
-			if v, ok := res.Record[f].(string); ok && v != "" {
-				out[f] = v
+		propose = func(pctx context.Context, fields []string, trimmed string) (map[string]string, error) {
+			props := map[string]any{}
+			for _, f := range fields {
+				props[f] = map[string]any{"type": "string"}
 			}
+			raw, merr := json.Marshal(map[string]any{
+				"type": "object", "properties": props,
+				"required": fields, "additionalProperties": false,
+			})
+			if merr != nil {
+				return nil, merr
+			}
+			asch, merr := extract.ParseSchema(raw)
+			if merr != nil {
+				return nil, merr
+			}
+			pex, err := newExtractor(provider, key, model, asch, db, runID)
+			if err != nil {
+				return nil, err
+			}
+			if cerr := checkCostCeiling(db, runID, provider, model, trimmed, cfg.MaxCost); cerr != nil {
+				return nil, cerr
+			}
+			res, xerr := pex.Extract(pctx, extract.ExtractInput{
+				Markdown: "Propose one CSS selector per required field that extracts its value from the page below.\n\n" + trimmed,
+				Schema:   asch, Purpose: "synth",
+			})
+			if xerr != nil {
+				return nil, xerr
+			}
+			out := map[string]string{}
+			for _, f := range fields {
+				if v, ok := res.Record[f].(string); ok && v != "" {
+					out[f] = v
+				}
+			}
+			return out, nil
 		}
-		return out, nil
 	}
 
 	// Subprocess exporter tee: records flow to --out AND the child stdin.
@@ -283,7 +306,7 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		AllowSubdomains: o.AllowSubdomains, NoSitemap: o.NoSitemap,
 		Format: cfg.Format, Out: cfg.Out, RunID: runID,
 		Resume: resuming, ResumeID: o.Resume, IgnoreRobots: o.IgnoreRobots,
-		Browser: o.Browser, Lang: o.Lang,
+		Browser: o.Browser, Lang: o.Lang, Corpus: o.Corpus,
 		Provider: provider, Model: model, MaxCost: cfg.MaxCost,
 		DB: db, Extractor: ex, Propose: propose, OnRecord: onRecord,
 	})
