@@ -121,11 +121,6 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	if err := cc.begin(); err != nil {
 		return Result{}, err
 	}
-	static, err := fetch.NewStaticFetcher()
-	if err != nil {
-		return Result{}, err
-	}
-	cc.static = static
 	if err := cc.seed(ctx); err != nil {
 		return Result{}, err
 	}
@@ -176,6 +171,11 @@ func newCrawlContext(opts Options) (*crawlContext, error) {
 	if opts.Resume && opts.ResumeID != "" {
 		cc.runID = opts.ResumeID
 	}
+	// Static fetcher for the pipeline (and sitemap expansion in seed);
+	// created in setup so Run reads as pure phase calls.
+	if cc.static, err = fetch.NewStaticFetcher(); err != nil {
+		return nil, err
+	}
 	return cc, nil
 }
 
@@ -185,9 +185,6 @@ func newCrawlContext(opts Options) (*crawlContext, error) {
 func (c *crawlContext) begin() error {
 	c.filter = NewFilter()
 	if !c.opts.Resume {
-		if c.runID == "" {
-			c.runID = newRunID()
-		}
 		if err := c.db.BeginRun(c.runID, "crawl"); err != nil {
 			return err
 		}
@@ -354,13 +351,14 @@ func (c *crawlContext) runPipeline(ctx context.Context) (Result, error) {
 		cfg.FetchWorkers = c.opts.FetchWorkers
 	}
 	runErr := core.Run(runCtx, cfg, source, c.fetchPage, c.cleanPage, c.extractPage, sink)
-	return c.finish(ctx, w, sinkErr, &pumpErr, runErr)
+	perr, _ := pumpErr.Load().(error) // nil when the pump never failed
+	return c.finish(ctx, w, sinkErr, perr, runErr)
 }
 
 // finish flushes per-domain null rates, closes the writer, and records
 // the terminal run status (error / interrupted / finished). Former Run
 // result-handling tail, verbatim.
-func (c *crawlContext) finish(ctx context.Context, w *writer, sinkErr error, pumpErr *atomic.Value, runErr error) (Result, error) {
+func (c *crawlContext) finish(ctx context.Context, w *writer, sinkErr error, pumpErr error, runErr error) (Result, error) {
 	// Final null-rate flush per domain.
 	c.domainsMu.Lock()
 	for domain, st := range c.domains {
@@ -384,9 +382,9 @@ func (c *crawlContext) finish(ctx context.Context, w *writer, sinkErr error, pum
 		finishWarn("error")
 		return Result{RunID: c.runID}, sinkErr
 	}
-	if perr, ok := pumpErr.Load().(error); ok && perr != nil {
+	if pumpErr != nil {
 		finishWarn("error")
-		return Result{RunID: c.runID}, perr
+		return Result{RunID: c.runID}, pumpErr
 	}
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
 		finishWarn("error")

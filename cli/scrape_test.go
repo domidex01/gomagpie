@@ -145,7 +145,7 @@ func codeOf(err error) int {
 	if err == nil {
 		return 0
 	}
-	return exitFor(err) // tests assert the same mapping the process edge uses
+	return exitCode(err) // tests assert the same mapping the process edge uses
 }
 
 func TestScrapeNoSchema(t *testing.T) {

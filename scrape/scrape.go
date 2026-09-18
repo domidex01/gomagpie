@@ -89,12 +89,12 @@ func (e *OptionsError) Error() string { return e.msg }
 // any I/O. One switch site, shared by Run (which calls it first), the CLI
 // commands, and batch — adding an option edits this function, not four
 // validators. The trust boundary stays in this package: callers map the
-// typed error (exit 2) but never re-implement the checks.
+// typed error (exit 2) but never re-implement the checks. CLI commands
+// may call it with a partial Options (browser-only pre-flight in
+// crawl/batch) — every check must stay optional-field-only, or those
+// subset calls break.
 func ValidateOptions(o Options) error {
-	render := o.Render
-	if render == "" {
-		render = "auto"
-	}
+	render := defaultRender(o.Render)
 	switch render {
 	case "auto", "static", "browser":
 	default:
@@ -114,6 +114,15 @@ func ValidateOptions(o Options) error {
 		}
 	}
 	return nil
+}
+
+// defaultRender is the single home for the Render empty→"auto" default,
+// shared by ValidateOptions and Run's dispatch.
+func defaultRender(r string) string {
+	if r == "" {
+		return "auto"
+	}
+	return r
 }
 
 // Run fetches, cleans, and optionally extracts one URL.
@@ -151,10 +160,7 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		vf = static
 	}
 	fetchStart := time.Now()
-	render := o.Render
-	if render == "" {
-		render = "auto" // same default ValidateOptions validated
-	}
+	render := defaultRender(o.Render) // same default ValidateOptions validated
 	page, err := fetchURL(ctx, vf, rawURL, render, o.Profile, o.Cookies, o.Browser)
 	if err != nil {
 		finish(0, 1, "error")

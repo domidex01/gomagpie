@@ -177,7 +177,9 @@ func checkCostCeiling(db *store.DB, runID, provider, model, promptText string, m
 		}
 	}
 	if running+proj > maxCost {
-		return fmt.Errorf("cost ceiling exceeded: running %.6f + projected %.6f > max %.6f: %w", running, proj, maxCost, crawl.ErrCostCeiling)
+		// crawl.ErrCostCeiling's text ("cost ceiling exceeded") ends the
+		// message — don't repeat it in front.
+		return fmt.Errorf("running %.6f + projected %.6f > max %.6f: %w", running, proj, maxCost, crawl.ErrCostCeiling)
 	}
 	return nil
 }

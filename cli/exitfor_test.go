@@ -13,11 +13,11 @@ import (
 	"gomagpie/vertical"
 )
 
-// Table over the single exit-code map. Codes here are API surface for
-// scripts; the httpd smokes (TestScrape_Exit8, TestMissingKeyExit7,
-// TestScrape_BadRenderExit2, crawl exits 3-6 in cmd_test.go) prove the
-// same codes end-to-end.
-func TestExitFor(t *testing.T) {
+// Table over the single exit-code map (exitCode — pure, no printing).
+// Codes here are API surface for scripts; the httpd smokes
+// (TestScrape_Exit8, TestMissingKeyExit7, TestScrape_BadRenderExit2,
+// crawl exits 3-6 in cmd_test.go) prove the same codes end-to-end.
+func TestExitCode(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -38,12 +38,9 @@ func TestExitFor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, _ := captureOutput(t, func() { // exitFor prints the message
-				if got := exitFor(tt.err); got != tt.want {
-					t.Errorf("exitFor(%v) = %d, want %d", tt.err, got, tt.want)
-				}
-			})
-			_ = out
+			if got := exitCode(tt.err); got != tt.want {
+				t.Errorf("exitCode(%v) = %d, want %d", tt.err, got, tt.want)
+			}
 		})
 	}
 }

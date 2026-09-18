@@ -74,15 +74,15 @@ func resolveConfig() (config.Config, error) {
 	return cfg, nil
 }
 
-// exitFor maps an error to the process exit code. It is the ONLY place
-// exit codes for typed pipeline errors are decided (validation → 2,
-// missing key → 7, quality → 8, cost ceiling → 6, robots → 5, scope/
-// SSRF/vertical-mismatch → 2); command handlers return the error (with
-// context attached) and never re-map. Command-specific usage errors keep
-// their local fail(code, …) — each is single-site, not a shared mapping.
-func exitFor(err error) int {
+// exitCode maps an error to the process exit code — pure, no printing
+// (tests assert the map directly). It is the ONLY place exit codes for
+// typed pipeline errors are decided (validation → 2, missing key → 7,
+// quality → 8, cost ceiling → 6, robots → 5, scope/SSRF/vertical-
+// mismatch → 2); command handlers return the error (with context
+// attached) and never re-map. Command-specific usage errors keep their
+// local fail(code, …) — each is single-site, not a shared mapping.
+func exitCode(err error) int {
 	if ce, ok := err.(*cmdError); ok {
-		fmt.Fprintln(os.Stderr, ce.msg)
 		return ce.code
 	}
 	code := 1
@@ -102,6 +102,17 @@ func exitFor(err error) int {
 		errors.Is(err, fetch.ErrPrivateAddress),
 		errors.Is(err, crawl.ErrBadScope):
 		code = 2
+	}
+	return code
+}
+
+// exitFor prints err the way the process edge does and returns exitCode's
+// mapping. Only Execute calls it; tests use exitCode to stay silent.
+func exitFor(err error) int {
+	code := exitCode(err)
+	if ce, ok := err.(*cmdError); ok {
+		fmt.Fprintln(os.Stderr, ce.msg)
+		return code
 	}
 	if code == 1 {
 		fmt.Fprintln(os.Stderr, "error:", err)
