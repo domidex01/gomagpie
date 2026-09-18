@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/vertical"
+	"magpie/vertical"
 )
 
 func TestCommerceMatch_OptInPositives(t *testing.T) {

@@ -3,16 +3,16 @@
 //
 // ABI contract (guests are built against this, not against Go source):
 //
-//	host module "gomagpie" exports:
-//	  gomagpie_log(level:i32, ptr:i32, len:i32)
-//	  gomagpie_get_input() -> (ptr:i32, len:i32)
+//	host module "magpie" exports:
+//	  magpie_log(level:i32, ptr:i32, len:i32)
+//	  magpie_get_input() -> (ptr:i32, len:i32)
 //	    host bump-allocates guest memory and writes the input record JSON
-//	  gomagpie_set_output(ptr:i32, len:i32)
+//	  magpie_set_output(ptr:i32, len:i32)
 //	    host reads guest memory and stores the output
-//	  gomagpie_config_get(kptr:i32, klen:i32) -> (vptr:i32, vlen:i32)
+//	  magpie_config_get(kptr:i32, klen:i32) -> (vptr:i32, vlen:i32)
 //	    whitelisted keys only; miss returns (0,0)
 //	guest exports:
-//	  gomagpie_api_version() -> i32 = major*10000+minor*100+patch
+//	  magpie_api_version() -> i32 = major*10000+minor*100+patch
 //	  run() -> i32 (0 = ok, else error)
 //
 // Strings cross as (ptr,len) u32 pairs — WithFunc takes numeric types only.
@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"gomagpie/core"
+	"magpie/core"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -57,14 +57,14 @@ type Runner struct {
 	lastLogs []LogEntry
 }
 
-// LogEntry is one guest gomagpie_log call.
+// LogEntry is one guest magpie_log call.
 type LogEntry struct {
 	Level   uint32
 	Message string
 }
 
 // NewRunner compiles wasmBytes and enforces the version gate: the guest
-// must export gomagpie_api_version ("not a gomagpie plugin" otherwise) and
+// must export magpie_api_version ("not a magpie plugin" otherwise) and
 // its major must match core.CoreAPIVersion.
 func NewRunner(ctx context.Context, wasmBytes []byte) (*Runner, error) {
 	return newRunnerWithConfig(ctx, wasmBytes, nil, DefaultMaxMemoryPages, DefaultTimeout)
@@ -129,7 +129,7 @@ type callState struct {
 }
 
 // Transform runs the guest's run() against input and returns what the guest
-// stored via gomagpie_set_output. run returning 0 without set_output is a
+// stored via magpie_set_output. run returning 0 without set_output is a
 // guest bug and errors loudly.
 func (r *Runner) Transform(ctx context.Context, input []byte) ([]byte, error) {
 	// Fail fast on an already-dead context: without this, a microsecond
@@ -170,7 +170,7 @@ func (r *Runner) Transform(ctx context.Context, input []byte) ([]byte, error) {
 
 	runFn := mod.ExportedFunction("run")
 	if runFn == nil {
-		return nil, fmt.Errorf("wasm: not a gomagpie plugin (missing run export)")
+		return nil, fmt.Errorf("wasm: not a magpie plugin (missing run export)")
 	}
 	results, err := runFn.Call(callCtx)
 	if err != nil {
@@ -211,43 +211,43 @@ func (r *Runner) apiVersion(ctx context.Context) (uint32, error) {
 		WithStderr(io.Discard))
 	if err != nil {
 		// Missing host/WASI imports surface here as instantiation failure.
-		return 0, fmt.Errorf("wasm: not a gomagpie plugin: %w", err)
+		return 0, fmt.Errorf("wasm: not a magpie plugin: %w", err)
 	}
 	defer func() { _ = mod.Close(ctx) }() //nolint:errcheck // gate teardown
-	fn := mod.ExportedFunction("gomagpie_api_version")
+	fn := mod.ExportedFunction("magpie_api_version")
 	if fn == nil {
-		return 0, fmt.Errorf("wasm: not a gomagpie plugin (missing gomagpie_api_version export)")
+		return 0, fmt.Errorf("wasm: not a magpie plugin (missing magpie_api_version export)")
 	}
 	results, err := fn.Call(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("wasm: api version: %w", err)
 	}
 	if len(results) == 0 {
-		return 0, fmt.Errorf("wasm: not a gomagpie plugin (api version returned nothing)")
+		return 0, fmt.Errorf("wasm: not a magpie plugin (api version returned nothing)")
 	}
 	return uint32(results[0]), nil
 }
 
 func (r *Runner) instantiateHost(ctx context.Context, st *callState) (api.Module, error) {
-	b := r.runtime.NewHostModuleBuilder("gomagpie")
+	b := r.runtime.NewHostModuleBuilder("magpie")
 	b.NewFunctionBuilder().
 		WithFunc(func(_ context.Context, mod api.Module, level, ptr, length uint32) {
 			msg := readGuest(mod, ptr, length)
 			st.logs = append(st.logs, LogEntry{Level: level, Message: string(msg)})
 		}).
-		Export("gomagpie_log")
+		Export("magpie_log")
 	b.NewFunctionBuilder().
 		WithFunc(func(_ context.Context, mod api.Module) (uint32, uint32) {
 			return writeGuest(mod, st, st.input)
 		}).
-		Export("gomagpie_get_input")
+		Export("magpie_get_input")
 	b.NewFunctionBuilder().
 		WithFunc(func(_ context.Context, mod api.Module, ptr, length uint32) {
 			buf := readGuest(mod, ptr, length)
 			out := append([]byte(nil), buf...)
 			st.output, st.hasOut = out, true
 		}).
-		Export("gomagpie_set_output")
+		Export("magpie_set_output")
 	b.NewFunctionBuilder().
 		WithFunc(func(_ context.Context, mod api.Module, kptr, klen uint32) (uint32, uint32) {
 			val, ok := st.config[string(readGuest(mod, kptr, klen))]
@@ -256,7 +256,7 @@ func (r *Runner) instantiateHost(ctx context.Context, st *callState) (api.Module
 			}
 			return writeGuest(mod, st, []byte(val))
 		}).
-		Export("gomagpie_config_get")
+		Export("magpie_config_get")
 	return b.Instantiate(ctx)
 }
 

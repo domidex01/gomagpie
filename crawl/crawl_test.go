@@ -22,10 +22,10 @@ import (
 	"testing"
 	"time"
 
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	"gomagpie/selector"
-	"gomagpie/store"
+	"magpie/extract"
+	"magpie/fetch"
+	"magpie/selector"
+	"magpie/store"
 )
 
 // selectorHash mirrors production's schemaHash for cache assertions.
@@ -91,8 +91,8 @@ type: object
 additionalProperties: false
 required: [price, title]
 properties:
-  price: {type: number, x-gomagpie: {coerce: "eur_decimal"}}
-  title: {type: string, x-gomagpie: {trim: true}}
+  price: {type: number, x-magpie: {coerce: "eur_decimal"}}
+  title: {type: string, x-magpie: {trim: true}}
   ean: {type: string}
 `
 

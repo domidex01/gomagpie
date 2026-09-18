@@ -1,4 +1,4 @@
-# Testing rules — gomagpie (`magpie`)
+# Testing rules — magpie (`magpie`)
 
 - Default suite is fast and hermetic: `go test ./...` — no live network, no browser.
   **Budget: ≤ 2 min wall.** Currently ~2 min, dominated by the two `go build` integration

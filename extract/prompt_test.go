@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/extract"
+	"magpie/extract"
 )
 
 func schemaKeysAbsent(t *testing.T, body map[string]any, keys ...string) {
@@ -32,7 +32,7 @@ func schemaKeysAbsent(t *testing.T, body map[string]any, keys ...string) {
 
 func TestOpenAIPromptText(t *testing.T) {
 	srv, fp := newFakeProvider(t, openAIEnvelope("plain summary"))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
 	a := extract.NewOpenAI("", "k", "gpt-4o-mini", nil)
 	text, usage, err := a.PromptText(context.Background(), "sys", "summarize this")
 	if err != nil {
@@ -53,7 +53,7 @@ func TestOpenAIPromptText(t *testing.T) {
 
 func TestAnthropicPromptText(t *testing.T) {
 	srv, fp := newFakeProvider(t, anthropicEnvelope("plain summary"))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
 	a := extract.NewAnthropic("", "k", "claude-sonnet-5", nil)
 	text, usage, err := a.PromptText(context.Background(), "sys", "summarize this")
 	if err != nil {

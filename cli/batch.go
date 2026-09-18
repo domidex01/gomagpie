@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"gomagpie/clean"
-	"gomagpie/scrape"
+	"magpie/clean"
+	"magpie/scrape"
 
 	"github.com/spf13/cobra"
 )

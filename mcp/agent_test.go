@@ -15,12 +15,12 @@ import (
 	"sync"
 	"testing"
 
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	magpiemcp "gomagpie/mcp"
-	"gomagpie/scrape"
-	"gomagpie/selector"
-	"gomagpie/store"
+	"magpie/extract"
+	"magpie/fetch"
+	magpiemcp "magpie/mcp"
+	"magpie/scrape"
+	"magpie/selector"
+	"magpie/store"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -914,7 +914,7 @@ func TestMCP_SearchZeroKeyProviderSmoke(t *testing.T) {
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	url := dead.URL
 	dead.Close() // closed port: connection refused, zero external dials
-	t.Setenv("GOMAGPIE_SEARXNG_URL", url)
+	t.Setenv("MAGPIE_SEARXNG_URL", url)
 	db := openMCPDB(t)
 	deps := agentDeps(db, &fakeExtractor{}, nil, &fakeAgentFetcher{})
 	deps.ScrapeDeps.APIKeyFor = func(string) string { return "" }

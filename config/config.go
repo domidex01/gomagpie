@@ -10,10 +10,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const keyringService = "gomagpie"
+const keyringService = "magpie"
 
 // Config holds resolved CLI configuration.
-// Precedence: flags > env (GOMAGPIE_) > file > defaults.
+// Precedence: flags > env (MAGPIE_) > file > defaults.
 type Config struct {
 	ExtractProvider string  `yaml:"extract_provider" json:"extract_provider"`
 	Model           string  `yaml:"model" json:"model"`
@@ -48,27 +48,27 @@ func DefaultConfig() Config {
 
 func DefaultConfigDir() string {
 	if v := os.Getenv("XDG_CONFIG_HOME"); v != "" {
-		return filepath.Join(v, "gomagpie")
+		return filepath.Join(v, "magpie")
 	}
 	if h, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(h, ".config", "gomagpie")
+		return filepath.Join(h, ".config", "magpie")
 	}
 	return "."
 }
 
 func DefaultConfigPath() string {
 	if appdata := os.Getenv("APPDATA"); appdata != "" {
-		return filepath.Join(appdata, "gomagpie", "config.yaml")
+		return filepath.Join(appdata, "magpie", "config.yaml")
 	}
 	return filepath.Join(DefaultConfigDir(), "config.yaml")
 }
 
 func DefaultDBPath() string {
 	if v := os.Getenv("XDG_CACHE_HOME"); v != "" {
-		return filepath.Join(v, "gomagpie", "cache.db")
+		return filepath.Join(v, "magpie", "cache.db")
 	}
 	if h, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(h, ".cache", "gomagpie", "cache.db")
+		return filepath.Join(h, ".cache", "magpie", "cache.db")
 	}
 	return filepath.Join(".", "cache.db")
 }
@@ -92,7 +92,7 @@ func DefaultModel(provider string) string {
 	}
 }
 
-// Load reads file (if present) then overlays GOMAGPIE_ env vars.
+// Load reads file (if present) then overlays MAGPIE_ env vars.
 func Load(path string) (Config, error) {
 	cfg := DefaultConfig()
 	if path == "" {
@@ -160,43 +160,43 @@ func (c *Config) overlay(o Config) {
 }
 
 func (c *Config) overlayEnv() {
-	if v := os.Getenv("GOMAGPIE_EXTRACT_PROVIDER"); v != "" {
+	if v := os.Getenv("MAGPIE_EXTRACT_PROVIDER"); v != "" {
 		c.ExtractProvider = v
 	}
-	if v := os.Getenv("GOMAGPIE_PROVIDER"); v != "" {
+	if v := os.Getenv("MAGPIE_PROVIDER"); v != "" {
 		c.ExtractProvider = v
 	}
-	if v := os.Getenv("GOMAGPIE_MODEL"); v != "" {
+	if v := os.Getenv("MAGPIE_MODEL"); v != "" {
 		c.Model = v
 	}
-	if v := os.Getenv("GOMAGPIE_RENDER"); v != "" {
+	if v := os.Getenv("MAGPIE_RENDER"); v != "" {
 		c.Render = v
 	}
-	if v := os.Getenv("GOMAGPIE_FORMAT"); v != "" {
+	if v := os.Getenv("MAGPIE_FORMAT"); v != "" {
 		c.Format = v
 	}
-	if v := os.Getenv("GOMAGPIE_OUT"); v != "" {
+	if v := os.Getenv("MAGPIE_OUT"); v != "" {
 		c.Out = v
 	}
-	if v := os.Getenv("GOMAGPIE_SCHEMA"); v != "" {
+	if v := os.Getenv("MAGPIE_SCHEMA"); v != "" {
 		c.Schema = v
 	}
-	if v := os.Getenv("GOMAGPIE_CACHE_DB"); v != "" {
+	if v := os.Getenv("MAGPIE_CACHE_DB"); v != "" {
 		c.CacheDB = v
 	}
-	if v := os.Getenv("GOMAGPIE_SERVE_TRANSPORT"); v != "" {
+	if v := os.Getenv("MAGPIE_SERVE_TRANSPORT"); v != "" {
 		c.ServeTransport = v
 	}
-	if v := os.Getenv("GOMAGPIE_SERVE_ADDR"); v != "" {
+	if v := os.Getenv("MAGPIE_SERVE_ADDR"); v != "" {
 		c.ServeAddr = v
 	}
-	if v := os.Getenv("GOMAGPIE_EXPORTER_CMD"); v != "" {
+	if v := os.Getenv("MAGPIE_EXPORTER_CMD"); v != "" {
 		c.ExporterCmd = v
 	}
-	if v := os.Getenv("GOMAGPIE_MAX_COST"); v != "" {
+	if v := os.Getenv("MAGPIE_MAX_COST"); v != "" {
 		var f float64
 		if _, err := fmt.Sscanf(v, "%g", &f); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: ignoring invalid GOMAGPIE_MAX_COST %q\n", v)
+			fmt.Fprintf(os.Stderr, "warning: ignoring invalid MAGPIE_MAX_COST %q\n", v)
 		} else {
 			c.MaxCost = f
 		}
@@ -290,7 +290,7 @@ func (c Config) APIKey(provider string) string {
 		return c.APIKeyFlag
 	}
 	p := keyEnvName(provider)
-	for _, name := range []string{"GOMAGPIE_" + p + "_API_KEY", "GOMAGPIE_API_KEY"} {
+	for _, name := range []string{"MAGPIE_" + p + "_API_KEY", "MAGPIE_API_KEY"} {
 		if v := os.Getenv(name); v != "" {
 			return v
 		}
@@ -304,7 +304,7 @@ func (c Config) APIKey(provider string) string {
 // SetKey stores provider key in the OS keyring.
 func SetKey(provider, key string) error {
 	if err := keyring.Set(keyringService, strings.ToLower(provider), key); err != nil {
-		return fmt.Errorf("no secret service; export GOMAGPIE_%s_API_KEY instead: %w",
+		return fmt.Errorf("no secret service; export MAGPIE_%s_API_KEY instead: %w",
 			keyEnvName(provider), err)
 	}
 	return nil

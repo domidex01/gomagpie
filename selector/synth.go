@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"gomagpie/clean"
-	"gomagpie/extract"
+	"magpie/clean"
+	"magpie/extract"
 
 	"github.com/PuerkitoBio/goquery"
 )

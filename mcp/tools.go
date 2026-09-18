@@ -8,12 +8,12 @@ import (
 	"os"
 	"time"
 
-	"gomagpie/clean"
-	"gomagpie/crawl"
-	"gomagpie/extract"
-	"gomagpie/scrape"
-	"gomagpie/selector"
-	"gomagpie/store"
+	"magpie/clean"
+	"magpie/crawl"
+	"magpie/extract"
+	"magpie/scrape"
+	"magpie/selector"
+	"magpie/store"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -27,7 +27,7 @@ var defaultCrawlSchema = []byte(`{"type":"object","properties":{"title":{"type":
 
 // ScrapeIn is the scrape_url input.
 type ScrapeIn struct {
-	URL             string     `json:"url" jsonschema:"absolute http(s) URL to scrape (file:// works only when GOMAGPIE_ALLOW_FILE=1; private/loopback hosts are rejected)"`
+	URL             string     `json:"url" jsonschema:"absolute http(s) URL to scrape (file:// works only when MAGPIE_ALLOW_FILE=1; private/loopback hosts are rejected)"`
 	Schema          FlexMap    `json:"schema,omitempty" jsonschema:"JSON Schema object; omit for cleaned markdown only"`
 	Render          string     `json:"render,omitempty" jsonschema:"auto, static, or browser"`
 	UseCache        *FlexBool  `json:"use_cache,omitempty" jsonschema:"apply cached selectors when available"`

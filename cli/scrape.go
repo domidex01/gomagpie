@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 
-	"gomagpie/clean"
-	"gomagpie/config"
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	"gomagpie/scrape"
+	"magpie/clean"
+	"magpie/config"
+	"magpie/extract"
+	"magpie/fetch"
+	"magpie/scrape"
 
 	"github.com/spf13/cobra"
 )

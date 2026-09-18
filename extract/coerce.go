@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Coerce applies a named x-gomagpie coercion to a string value.
+// Coerce applies a named x-magpie coercion to a string value.
 func Coerce(kind, in string) (any, error) {
 	switch kind {
 	case "trim":

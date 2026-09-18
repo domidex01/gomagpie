@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"gomagpie/config"
-	"gomagpie/crawl"
-	"gomagpie/extract"
-	"gomagpie/scrape"
-	"gomagpie/store"
+	"magpie/config"
+	"magpie/crawl"
+	"magpie/extract"
+	"magpie/scrape"
+	"magpie/store"
 )
 
 // ProviderHelp is the single home for the --provider value list, shared by
@@ -50,7 +50,7 @@ func newExtractor(provider, key, model string, sch *extract.Schema, db *store.DB
 		a.Provider = provider
 		a.Log = log
 		a.ExtraHeaders = map[string]string{
-			"HTTP-Referer": "https://github.com/you/gomagpie",
+			"HTTP-Referer": "https://github.com/you/magpie",
 			"X-Title":      "magpie",
 		}
 		// Hard schema routing: without require_parameters OpenRouter may
@@ -104,7 +104,7 @@ func closeDB(db *store.DB) {
 
 // setKeyHint is the single home for the API-key setup hint, shared by
 // the pre-flight checks and the pipeline error path.
-const setKeyHint = "set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`"
+const setKeyHint = "set via --api-key flag, MAGPIE_* env, or `magpie config set-key`"
 
 // scrapeDeps builds the pipeline Deps over db with the CLI extractor
 // wiring. Shared so batch's goroutine fan-out uses the exact same

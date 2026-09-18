@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"gomagpie/crawl"
+	"magpie/crawl"
 
 	"github.com/spf13/cobra"
 )

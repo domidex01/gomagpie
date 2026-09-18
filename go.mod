@@ -1,4 +1,4 @@
-module gomagpie
+module magpie
 
 go 1.26.5
 

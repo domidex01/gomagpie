@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"gomagpie/clean"
+	"magpie/clean"
 )
 
 func init() {

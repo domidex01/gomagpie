@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/vertical"
+	"magpie/vertical"
 )
 
 func TestRedditMatch_Table(t *testing.T) {

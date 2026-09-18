@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"gomagpie/clean"
-	"gomagpie/core"
-	"gomagpie/fetch"
+	"magpie/clean"
+	"magpie/core"
+	"magpie/fetch"
 )
 
 func TestPipelineOrdersAndDrains(t *testing.T) {

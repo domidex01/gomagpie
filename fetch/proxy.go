@@ -1,7 +1,7 @@
 package fetch
 
-// Proxy pool (Phase G): GOMAGPIE_PROXY_FILE (multi-entry, rotation) wins
-// over GOMAGPIE_PROXY (single entry = 1-entry pool). One concrete struct,
+// Proxy pool (Phase G): MAGPIE_PROXY_FILE (multi-entry, rotation) wins
+// over MAGPIE_PROXY (single entry = 1-entry pool). One concrete struct,
 // one implementation — no interface. The trust seam is proxiedForHost:
 // non-nil proxyForHost ⇒ operator-chosen egress ⇒ dialPeerAllowed skips
 // the peer check. Everything else stays peer-checked.
@@ -197,7 +197,7 @@ func RedactProxy(u *url.URL) string {
 
 // poolCache memoizes the parsed pool keyed by the full env
 // configuration. Keyed per env VALUE (not per process) so tests that
-// point GOMAGPIE_PROXY_FILE at different temp files get isolated pools.
+// point MAGPIE_PROXY_FILE at different temp files get isolated pools.
 var poolCache struct {
 	mu  sync.Mutex
 	key string
@@ -205,13 +205,13 @@ var poolCache struct {
 	err error
 }
 
-// currentPool resolves the pool from the environment: GOMAGPIE_PROXY_FILE
-// wins over GOMAGPIE_PROXY (which becomes a 1-entry pool). Neither set →
+// currentPool resolves the pool from the environment: MAGPIE_PROXY_FILE
+// wins over MAGPIE_PROXY (which becomes a 1-entry pool). Neither set →
 // nil pool (standard HTTP(S)_PROXY environment semantics apply).
 func currentPool() (*pool, error) {
-	file := strings.TrimSpace(os.Getenv("GOMAGPIE_PROXY_FILE"))
-	single := strings.TrimSpace(os.Getenv("GOMAGPIE_PROXY"))
-	strategy := strings.TrimSpace(os.Getenv("GOMAGPIE_PROXY_STRATEGY"))
+	file := strings.TrimSpace(os.Getenv("MAGPIE_PROXY_FILE"))
+	single := strings.TrimSpace(os.Getenv("MAGPIE_PROXY"))
+	strategy := strings.TrimSpace(os.Getenv("MAGPIE_PROXY_STRATEGY"))
 	if file == "" && single == "" {
 		return nil, nil
 	}
@@ -240,7 +240,7 @@ func buildPool(file, single, strategy string) (*pool, error) {
 		e, err := parsePoolLine(single)
 		if err != nil {
 			// Preserve the historical env-single message (tests pin it).
-			return nil, fmt.Errorf("fetch: bad GOMAGPIE_PROXY %q: want %s: %w", single, ProxyHelp, ErrProxyConfig)
+			return nil, fmt.Errorf("fetch: bad MAGPIE_PROXY %q: want %s: %w", single, ProxyHelp, ErrProxyConfig)
 		}
 		entries = []poolEntry{e}
 	}
@@ -248,7 +248,7 @@ func buildPool(file, single, strategy string) (*pool, error) {
 		strategy = "round-robin"
 	}
 	if strategy != "round-robin" && strategy != "sticky-host" {
-		return nil, fmt.Errorf("fetch: GOMAGPIE_PROXY_STRATEGY %q must be round-robin|sticky-host: %w", strategy, ErrProxyConfig)
+		return nil, fmt.Errorf("fetch: MAGPIE_PROXY_STRATEGY %q must be round-robin|sticky-host: %w", strategy, ErrProxyConfig)
 	}
 	return &pool{
 		entries:  entries,
@@ -279,7 +279,7 @@ func proxyForHostPick(hostname string) (*url.URL, *pool, int, error) {
 }
 
 // proxyForHost is the per-request seam: the stock transport's Proxy func
-// AND the browser dial both consult it. GOMAGPIE_PROXY(_FILE) wins over
+// AND the browser dial both consult it. MAGPIE_PROXY(_FILE) wins over
 // the standard environment; NO_PROXY bypasses (peer check then applies —
 // safe default).
 func proxyForHost(hostname string) (*url.URL, error) {

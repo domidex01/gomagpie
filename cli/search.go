@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"gomagpie/scrape"
+	"magpie/scrape"
 
 	"github.com/spf13/cobra"
 )

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"gomagpie/scrape"
-	"gomagpie/store"
+	"magpie/scrape"
+	"magpie/store"
 )
 
 type fakeProvider struct {
@@ -138,7 +138,7 @@ func testEnv(t *testing.T, dbName string) string {
 	t.Setenv("XDG_CACHE_HOME", dir)
 	t.Setenv("APPDATA", "")
 	db := filepath.Join(dir, dbName)
-	t.Setenv("GOMAGPIE_CACHE_DB", db)
+	t.Setenv("MAGPIE_CACHE_DB", db)
 	return db
 }
 
@@ -175,8 +175,8 @@ func TestScrapeNoSchema(t *testing.T) {
 func TestScrapeEndToEndFileURL(t *testing.T) {
 	dbPath := testEnv(t, "cache.db")
 	srv, fp := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
-	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_OPENAI_API_KEY", "test-key")
 	abs := mustAbs(t, "../testdata/clean/article.html")
 	schema := mustAbs(t, "../testdata/extract/price.yaml")
 	out := filepath.Join(t.TempDir(), "out.json")
@@ -232,9 +232,9 @@ func TestScrapeBadFormat(t *testing.T) {
 func TestMaxCostAbortsBeforeCall(t *testing.T) {
 	testEnv(t, "cache.db")
 	srv, fp := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
-	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
-	t.Setenv("GOMAGPIE_MAX_COST", "0.000001")
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_OPENAI_API_KEY", "test-key")
+	t.Setenv("MAGPIE_MAX_COST", "0.000001")
 	abs := mustAbs(t, "../testdata/clean/article.html")
 	schema := mustAbs(t, "../testdata/extract/price.yaml")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{
@@ -250,9 +250,9 @@ func TestMaxCostAbortsBeforeCall(t *testing.T) {
 
 func TestMissingKeyExit7(t *testing.T) {
 	testEnv(t, "cache.db")
-	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "")
-	t.Setenv("GOMAGPIE_ANTHROPIC_API_KEY", "")
-	t.Setenv("GOMAGPIE_API_KEY", "")
+	t.Setenv("MAGPIE_OPENAI_API_KEY", "")
+	t.Setenv("MAGPIE_ANTHROPIC_API_KEY", "")
+	t.Setenv("MAGPIE_API_KEY", "")
 	abs := mustAbs(t, "../testdata/clean/article.html")
 	schema := mustAbs(t, "../testdata/extract/price.yaml")
 	err := runScrape(t.Context(), "file://"+abs, scrapeOptions{
@@ -269,8 +269,8 @@ func TestMissingKeyExit7(t *testing.T) {
 func TestExtractCmdStdinHTML(t *testing.T) {
 	dbPath := testEnv(t, "cache.db")
 	srv, _ := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
-	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_OPENAI_API_KEY", "test-key")
 	html := mustRead(t, "../testdata/clean/article.html")
 	// Simulate stdin via temp file (no fetch involved).
 	in := filepath.Join(t.TempDir(), "in.html")

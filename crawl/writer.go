@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"gomagpie/core"
-	"gomagpie/extract"
-	"gomagpie/store"
+	"magpie/core"
+	"magpie/extract"
+	"magpie/store"
 )
 
 // writer serializes PageResults. jsonl streams; json buffers the full array

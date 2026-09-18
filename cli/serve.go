@@ -7,11 +7,11 @@ import (
 	"os"
 	"os/signal"
 
-	"gomagpie/config"
-	"gomagpie/extract"
-	magpiemcp "gomagpie/mcp"
-	"gomagpie/scrape"
-	"gomagpie/store"
+	"magpie/config"
+	"magpie/extract"
+	magpiemcp "magpie/mcp"
+	"magpie/scrape"
+	"magpie/store"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
@@ -22,7 +22,7 @@ func newServeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Serve the pipeline over MCP (stdio or Streamable HTTP)",
-		Long: `Serve gomagpie tools over MCP.
+		Long: `Serve magpie tools over MCP.
 
 Tools: scrape_url, crawl_site, extract_structured, get_cached_selectors,
 batch, map, summarize, diff, brand, list_extractors, vertical_scrape.

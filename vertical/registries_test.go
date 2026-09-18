@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"gomagpie/vertical"
+	"magpie/vertical"
 )
 
 func TestRegistriesMatch_Table(t *testing.T) {

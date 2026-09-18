@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/fetch"
+	"magpie/fetch"
 
 	"github.com/go-rod/rod/lib/launcher"
 )

@@ -6,8 +6,8 @@
 package mcp
 
 import (
-	"gomagpie/scrape"
-	"gomagpie/store"
+	"magpie/scrape"
+	"magpie/store"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -28,7 +28,7 @@ type Deps struct {
 // widened for stringy clients) — never bare sdk.Tool literals, so a new
 // tool cannot silently miss coercion.
 func NewServer(d Deps) *sdk.Server {
-	server := sdk.NewServer(&sdk.Implementation{Name: "gomagpie", Version: "v1.0.0"}, nil)
+	server := sdk.NewServer(&sdk.Implementation{Name: "magpie", Version: "v1.0.0"}, nil)
 	sdk.AddTool(server, widenedTool[ScrapeIn]("scrape_url", "Fetch, clean and extract one URL"), handleScrape(d))
 	sdk.AddTool(server, widenedTool[CrawlIn]("crawl_site", "Crawl a site (synchronous) or poll a previous run by run_id"), handleCrawl(d))
 	sdk.AddTool(server, widenedTool[ExtractIn]("extract_structured", "Extract structured data from HTML or markdown (no fetch)"), handleExtract(d))

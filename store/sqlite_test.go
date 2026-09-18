@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/store"
+	"magpie/store"
 )
 
 func openTempDB(t *testing.T) *store.DB {

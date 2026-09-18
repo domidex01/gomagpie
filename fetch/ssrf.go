@@ -24,7 +24,7 @@ import (
 // binaries always resolve to the strict zero value.
 type SSRFOptions struct {
 	AllowPrivate bool // allow loopback/private/link-local literal and resolved hosts
-	AllowFile    bool // allow file:// URLs (set via GOMAGPIE_ALLOW_FILE=1 in production)
+	AllowFile    bool // allow file:// URLs (set via MAGPIE_ALLOW_FILE=1 in production)
 }
 
 // LookupFunc resolves a hostname to IPs; nil means
@@ -56,7 +56,7 @@ func ValidateURL(ctx context.Context, raw string, lookup LookupFunc, o SSRFOptio
 	case "http", "https":
 	case "file":
 		if !o.AllowFile {
-			return ssrfErr("fetch: file:// blocked (set GOMAGPIE_ALLOW_FILE=1 to allow)")
+			return ssrfErr("fetch: file:// blocked (set MAGPIE_ALLOW_FILE=1 to allow)")
 		}
 		return nil
 	default:
@@ -124,10 +124,10 @@ func isPublicIP(a netip.Addr) bool {
 // isTestBinary reports whether we're running under `go test`. The hatch:
 // test binaries auto-relax private-net + file checks so the existing
 // httptest/file suite needs zero churn. Test binaries never ship; the
-// production binary is always strict. GOMAGPIE_STRICT_SSRF=1 forces the
+// production binary is always strict. MAGPIE_STRICT_SSRF=1 forces the
 // strict path even under go test (lets end-to-end tests exercise it).
 func isTestBinary() bool {
-	if os.Getenv("GOMAGPIE_STRICT_SSRF") == "1" {
+	if os.Getenv("MAGPIE_STRICT_SSRF") == "1" {
 		return false
 	}
 	return flag.Lookup("test.v") != nil
@@ -136,12 +136,12 @@ func isTestBinary() bool {
 func resolvedSSRFOptions() SSRFOptions {
 	return SSRFOptions{
 		AllowPrivate: isTestBinary(),
-		AllowFile:    isTestBinary() || os.Getenv("GOMAGPIE_ALLOW_FILE") == "1",
+		AllowFile:    isTestBinary() || os.Getenv("MAGPIE_ALLOW_FILE") == "1",
 	}
 }
 
 // NewStaticFetcher builds the default fetcher: strict in production,
-// hatch-relaxed under go test (or GOMAGPIE_ALLOW_FILE=1 for file://).
+// hatch-relaxed under go test (or MAGPIE_ALLOW_FILE=1 for file://).
 func NewStaticFetcher() (*StaticFetcher, error) {
 	return NewStaticFetcherWithOptions(resolvedSSRFOptions())
 }

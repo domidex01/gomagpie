@@ -110,8 +110,8 @@ func TestMap_LinesAndJSON(t *testing.T) {
 func TestSummarize_MaxSentences(t *testing.T) {
 	dbPath := testEnv(t, "cache.db")
 	srv, fp := newFakeProvider(t, openAIEnvelope("First sentence here. Second sentence here. Third and fourth follow along."))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
-	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_OPENAI_API_KEY", "test-key")
 	abs := mustAbs(t, "../testdata/clean/article.html")
 	out := filepath.Join(t.TempDir(), "out.json")
 	err := runSummarize(t.Context(), "file://"+abs, summarizeOptions{
@@ -271,8 +271,8 @@ func TestExtract_PromptXor(t *testing.T) {
 func TestExtract_PromptText(t *testing.T) {
 	dbPath := testEnv(t, "cache.db")
 	srv, fp := newFakeProvider(t, openAIEnvelope("plain summary"))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
-	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_OPENAI_API_KEY", "test-key")
 	abs := mustAbs(t, "../testdata/clean/article.html")
 	out := filepath.Join(t.TempDir(), "out.txt")
 	err := runExtract(t.Context(), extractOptions{
@@ -300,7 +300,7 @@ func TestExtract_PromptText(t *testing.T) {
 
 func TestProvider_Unknown(t *testing.T) {
 	testEnv(t, "cache.db")
-	t.Setenv("GOMAGPIE_BOGUS_API_KEY", "x") // reach the switch past the key check
+	t.Setenv("MAGPIE_BOGUS_API_KEY", "x") // reach the switch past the key check
 	abs := mustAbs(t, "../testdata/clean/article.html")
 	// A typo must never silently bill another provider.
 	err := runSummarize(t.Context(), "file://"+abs, summarizeOptions{Provider: "bogus"})
@@ -311,7 +311,7 @@ func TestProvider_Unknown(t *testing.T) {
 
 func TestAutoProviders_Order(t *testing.T) {
 	testEnv(t, "cache.db")
-	for _, k := range []string{"GOMAGPIE_ANTHROPIC_API_KEY", "GOMAGPIE_OPENAI_API_KEY", "GOMAGPIE_OPENROUTER_API_KEY", "GOMAGPIE_OPENCODE_ZEN_API_KEY", "GOMAGPIE_OPENCODE_GO_API_KEY", "GOMAGPIE_API_KEY"} {
+	for _, k := range []string{"MAGPIE_ANTHROPIC_API_KEY", "MAGPIE_OPENAI_API_KEY", "MAGPIE_OPENROUTER_API_KEY", "MAGPIE_OPENCODE_ZEN_API_KEY", "MAGPIE_OPENCODE_GO_API_KEY", "MAGPIE_API_KEY"} {
 		t.Setenv(k, "")
 	}
 	cfg, err := resolveConfig()
@@ -323,8 +323,8 @@ func TestAutoProviders_Order(t *testing.T) {
 	if len(got) != 2 || got[0] != "ollama" || got[1] != "codex" {
 		t.Fatalf("keyless auto = %v, want [ollama codex]", got)
 	}
-	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "k")
-	t.Setenv("GOMAGPIE_ANTHROPIC_API_KEY", "k2")
+	t.Setenv("MAGPIE_OPENAI_API_KEY", "k")
+	t.Setenv("MAGPIE_ANTHROPIC_API_KEY", "k2")
 	cfg, err = resolveConfig()
 	if err != nil {
 		t.Fatal(err)

@@ -244,7 +244,7 @@ func TestBrowserDialProxyRouting(t *testing.T) {
 		}
 	}
 
-	t.Setenv("GOMAGPIE_PROXY", "http://"+proxyAddr)
+	t.Setenv("MAGPIE_PROXY", "http://"+proxyAddr)
 	// Error is expected (the recorder isn't a real CONNECT proxy); the
 	// assertion is WHERE the connection landed.
 	_, _ = d(ctx, "tcp", "example.com:443") //nolint:errcheck // routing proof, not a fetch

@@ -8,11 +8,11 @@ import (
 	"os/signal"
 	"strings"
 
-	"gomagpie/crawl"
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	pluginExec "gomagpie/plugin/exec"
-	"gomagpie/scrape"
+	"magpie/crawl"
+	"magpie/extract"
+	"magpie/fetch"
+	pluginExec "magpie/plugin/exec"
+	"magpie/scrape"
 
 	"github.com/spf13/cobra"
 )

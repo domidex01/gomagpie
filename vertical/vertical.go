@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gomagpie/fetch"
+	"magpie/fetch"
 )
 
 // ErrNoMatch marks a URL no strict extractor handles (auto-dispatch miss).

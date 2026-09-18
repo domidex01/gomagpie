@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/clean"
+	"magpie/clean"
 )
 
 func qualityFixture(t *testing.T, name string) []byte {

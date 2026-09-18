@@ -2,6 +2,6 @@ module buildmod
 
 go 1.26.5
 
-require gomagpie v0.0.0
+require magpie v0.0.0
 
-replace gomagpie => ../..
+replace magpie => ../..

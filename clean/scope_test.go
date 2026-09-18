@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/clean"
+	"magpie/clean"
 )
 
 const scopeShell = `<html><head><title>Shell</title></head><body>` +

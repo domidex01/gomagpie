@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"gomagpie/clean"
-	"gomagpie/fetch"
-	"gomagpie/vertical"
+	"magpie/clean"
+	"magpie/fetch"
+	"magpie/vertical"
 
 	"github.com/jimsmart/grobotstxt"
 )

@@ -1,4 +1,4 @@
-# Technical Specification: `gomagpie` — A Go CLI Web Scraper with LLM Selector Synthesis
+# Technical Specification: `magpie` — A Go CLI Web Scraper with LLM Selector Synthesis
 
 ## TL;DR
 - **Build it as a minimal Cobra core + plugin registry**, using **go-rod for JS rendering** (it does not leave zombie Chrome processes on Windows/Mac where chromedp does, and its decode-on-demand event bus avoids chromedp's fixed-buffer deadlocks), **go-trafilatura v2 + html-to-markdown/v2 for cleaning**, a **provider-agnostic LLM extractor** with per-provider native structured-output, and a **domain+schema-hashed SQLite selector cache with null-rate self-healing** as the core differentiator.
@@ -195,7 +195,7 @@ Per call, record `{provider, model, prompt_tokens, completion_tokens, usd_estima
 
 ### 3.7 User-facing schema file format
 
-**Decision: JSON Schema draft 2020-12 subset, in YAML or JSON**, with a reserved `x-gomagpie` extension namespace for hints (JSON Schema allows unknown `x-` keywords; validators ignore them).
+**Decision: JSON Schema draft 2020-12 subset, in YAML or JSON**, with a reserved `x-magpie` extension namespace for hints (JSON Schema allows unknown `x-` keywords; validators ignore them).
 
 ```yaml
 $schema: "https://json-schema.org/draft/2020-12/schema"
@@ -205,19 +205,19 @@ required: [title, price]
 properties:
   title:
     type: string
-    x-gomagpie: { css_hint: "h1#productTitle", trim: true }
+    x-magpie: { css_hint: "h1#productTitle", trim: true }
   price:
     type: number
-    x-gomagpie:
+    x-magpie:
       css_hint: "span.a-price .a-offscreen"
       regex: '[0-9]+[.,][0-9]{2}'
       coerce: "eur_decimal"   # strips €, converts ',' → '.'
   ean:
     type: [string, "null"]
-    x-gomagpie: { jsonld_path: "$.gtin13" }
+    x-magpie: { jsonld_path: "$.gtin13" }
 ```
 
-Custom `x-gomagpie` extensions: `css_hint`, `xpath_hint`, `regex` (post-extraction capture), `coerce` (type coercion: `int`, `float`, `eur_decimal`, `iso_date`, `bool`), `jsonld_path` (pull from the JSON-LD sidecar first), `trim`, `multiple` (expect array).
+Custom `x-magpie` extensions: `css_hint`, `xpath_hint`, `regex` (post-extraction capture), `coerce` (type coercion: `int`, `float`, `eur_decimal`, `iso_date`, `bool`), `jsonld_path` (pull from the JSON-LD sidecar first), `trim`, `multiple` (expect array).
 
 ---
 
@@ -251,7 +251,7 @@ Our differentiator vs all three: **synthesize selectors once from N samples, val
    - schema_hash = SHA-256 of the canonicalized schema JSON.
 4. APPLY (steady state)
    - For each new page: run cached selectors via goquery/xpath. NO LLM call.
-   - Apply x-gomagpie regex + coerce. Emit record.
+   - Apply x-magpie regex + coerce. Emit record.
 5. SELF-HEAL
    - Track per-field null rate over a sliding window (default last 50 pages).
    - If any field's null rate crosses threshold (default 0.30), mark that
@@ -281,7 +281,7 @@ SQLite table `selector_cache` (§9). Selectors stored as a JSON document:
 }
 ```
 
-Location: `%LOCALAPPDATA%\gomagpie\cache.db` on Windows, `$XDG_CACHE_HOME/gomagpie/cache.db` (fallback `~/.cache/gomagpie`) on Linux/macOS. Override with `--cache-db`.
+Location: `%LOCALAPPDATA%\magpie\cache.db` on Windows, `$XDG_CACHE_HOME/magpie/cache.db` (fallback `~/.cache/magpie`) on Linux/macOS. Override with `--cache-db`.
 
 ---
 
@@ -388,7 +388,7 @@ type RateLimitStrategy interface {
 
 ### 6.1 Version negotiation
 
-The core defines `CoreAPIVersion` (semver). At registration, the core compares the plugin's `APIVersion`: **same major = accepted** (minor/patch differences tolerated, forward-compatible); **different major = rejected** with a clear error. WASM plugins declare their version via an exported `gomagpie_api_version` function. This is the Caddy model plus an explicit semver gate.
+The core defines `CoreAPIVersion` (semver). At registration, the core compares the plugin's `APIVersion`: **same major = accepted** (minor/patch differences tolerated, forward-compatible); **different major = rejected** with a clear error. WASM plugins declare their version via an exported `magpie_api_version` function. This is the Caddy model plus an explicit semver gate.
 
 ### 6.2 Three plugin transports (per fixed constraints)
 
@@ -405,7 +405,7 @@ Caddy's model: a module registers itself in `init()` via `caddy.RegisterModule`,
 ```go
 package rodfetcher
 
-import "github.com/you/gomagpie/core"
+import "github.com/you/magpie/core"
 
 func init() {
     core.RegisterModule(RodFetcher{})
@@ -413,7 +413,7 @@ func init() {
 
 type RodFetcher struct{ /* config */ }
 
-func (RodFetcher) GomagpieModule() core.ModuleInfo {
+func (RodFetcher) MagpieModule() core.ModuleInfo {
     return core.ModuleInfo{
         ID:         "fetcher.rod",
         APIVersion: "1.0.0",
@@ -438,10 +438,10 @@ Both are viable; Extism is itself built on wazero. The decision hinges on **cont
 ### 7.1 Host-function surface granted to untrusted WASM plugins
 
 **Granted (explicitly exported host functions):**
-- `gomagpie_log(level, ptr, len)` — structured logging only.
-- `gomagpie_get_input() -> (ptr,len)` — read the page/record handed to the plugin.
-- `gomagpie_set_output(ptr, len)` — return transformed data.
-- `gomagpie_config_get(key_ptr,key_len) -> (ptr,len)` — read whitelisted config keys only.
+- `magpie_log(level, ptr, len)` — structured logging only.
+- `magpie_get_input() -> (ptr,len)` — read the page/record handed to the plugin.
+- `magpie_set_output(ptr, len)` — return transformed data.
+- `magpie_config_get(key_ptr,key_len) -> (ptr,len)` — read whitelisted config keys only.
 
 **Denied (no host function exists, so it is unreachable):**
 - No filesystem access (no WASI `fd_*` preopens granted).
@@ -593,11 +593,11 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 
 ### 9.3 Config format & precedence
 
-**Decision: single YAML config file, with precedence flags > env > file > built-in defaults.** File at `%APPDATA%\gomagpie\config.yaml` (Windows) / `$XDG_CONFIG_HOME/gomagpie/config.yaml`. Env vars prefixed `GOMAGPIE_` (e.g. `GOMAGPIE_EXTRACT_PROVIDER=anthropic`). Every config key has a corresponding flag.
+**Decision: single YAML config file, with precedence flags > env > file > built-in defaults.** File at `%APPDATA%\magpie\config.yaml` (Windows) / `$XDG_CONFIG_HOME/magpie/config.yaml`. Env vars prefixed `MAGPIE_` (e.g. `MAGPIE_EXTRACT_PROVIDER=anthropic`). Every config key has a corresponding flag.
 
 ### 9.4 API-key handling on Windows
 
-**Decision: zalando/go-keyring (v0.2.8, released Mar 23 2026).** One cross-platform API that maps to **Windows Credential Manager**, macOS Keychain, and Linux Secret Service; its `keyring_windows.go` calls `wincred.GetGenericCredential(...)`, so on Windows you get danieljoos/wincred's native Credential Manager behavior with no per-OS code (it stores under a `service:username` target name). Keys are stored under service `gomagpie`, username = provider. Precedence for reading a key: explicit flag > `GOMAGPIE_<PROVIDER>_API_KEY` env > OS keyring > config file (discouraged; if used, warn and require file perms 0600). Never log keys. Caveat: on headless Linux/CI the Secret Service may be absent — fall back to env var there (the standard CI pattern). Drop to wincred directly only if you go Windows-only. `magpie config set-key anthropic` prompts and stores into the keyring.
+**Decision: zalando/go-keyring (v0.2.8, released Mar 23 2026).** One cross-platform API that maps to **Windows Credential Manager**, macOS Keychain, and Linux Secret Service; its `keyring_windows.go` calls `wincred.GetGenericCredential(...)`, so on Windows you get danieljoos/wincred's native Credential Manager behavior with no per-OS code (it stores under a `service:username` target name). Keys are stored under service `magpie`, username = provider. Precedence for reading a key: explicit flag > `MAGPIE_<PROVIDER>_API_KEY` env > OS keyring > config file (discouraged; if used, warn and require file perms 0600). Never log keys. Caveat: on headless Linux/CI the Secret Service may be absent — fall back to env var there (the standard CI pattern). Drop to wincred directly only if you go Windows-only. `magpie config set-key anthropic` prompts and stores into the keyring.
 
 ---
 
@@ -659,17 +659,17 @@ magpie scrape https://www.amazon.fr/dp/B0XXXX --schema price.yaml --format json
 magpie crawl https://books.example.com --schema book.yaml --max-pages 500 --format jsonl --out books.jsonl
 echo "$HTML" | magpie extract --schema price.yaml --content-type html
 magpie serve --transport http --addr :8080
-magpie build --with github.com/acme/gomagpie-proxy@v1.2.0 --output magpie-custom
+magpie build --with github.com/acme/magpie-proxy@v1.2.0 --output magpie-custom
 magpie cache inspect --domain amazon.fr
 ```
 
 ### 10.4 Egress & challenges (Phase G delta)
 
-- **Proxy pool:** `GOMAGPIE_PROXY_FILE` (multi-entry; wins over
-  `GOMAGPIE_PROXY`, which is a 1-entry pool; both win over the standard
+- **Proxy pool:** `MAGPIE_PROXY_FILE` (multi-entry; wins over
+  `MAGPIE_PROXY`, which is a 1-entry pool; both win over the standard
   env proxies). Line forms: `http(s)://`, `socks5(h)://`, or vendor-paste
   `host:port:user:pass`. `#` comments. Strategies:
-  `GOMAGPIE_PROXY_STRATEGY=round-robin|sticky-host`; `{{session}}` in an
+  `MAGPIE_PROXY_STRATEGY=round-robin|sticky-host`; `{{session}}` in an
   entry → per-target-host stable 8-hex token. Dial/CONNECT failures put
   an entry on a 60 s cooldown and the fetch fails over (≤ min(3, |pool|)
   attempts); HTTP statuses are page outcomes, never egress failures.
@@ -678,7 +678,7 @@ magpie cache inspect --domain amazon.fr
   never surface in errors/logs/records. `--proxy-file` is flag sugar
   over the env. NO_PROXY bypasses the pool (the SSRF peer check then
   applies — safe default); operator-chosen egress (any pool/proxy entry)
-  skips the peer check for the proxy dial, exactly as `GOMAGPIE_PROXY`
+  skips the peer check for the proxy dial, exactly as `MAGPIE_PROXY`
   always has. Tor (`socks5://127.0.0.1:9050`) is the canonical loopback
   proxy: trusted egress, publicly-dialed targets.
 - **Typed challenges:** `fetch.ChallengeError{Vendor, StatusCode, URL}`
@@ -703,13 +703,13 @@ magpie cache inspect --domain amazon.fr
   fingerprint.
 - **Search:** `magpie search` (MCP tool `search`) over a data registry of
   six backends — brave, serper, serpapi, exa (BYOK via the generic key
-  derivation), searxng (`GOMAGPIE_SEARXNG_URL`, zero-key), duckduckgo
+  derivation), searxng (`MAGPIE_SEARXNG_URL`, zero-key), duckduckgo
   (zero-key default). JSONL records `{position,title,url,snippet[,page]}`;
   `--scrape-top N` runs the first N hit URLs through `scrape.Batch`.
   Missing keys exit 7; unknown providers exit 2. The client rides the
   guarded transport with an explicit `AllowPrivate` opt-in — every peer
   of the search client is operator-configured (fixed provider endpoints
-  or `GOMAGPIE_SEARXNG_URL`; a localhost searxng is the canonical
+  or `MAGPIE_SEARXNG_URL`; a localhost searxng is the canonical
   zero-key deployment), while SERP hit URLs scrape through the strict
   pipeline.
 
@@ -719,7 +719,7 @@ magpie cache inspect --domain amazon.fr
 
 - **robots.txt: jimsmart/grobotstxt** (v1.0.3). A faithful native Go port of Google's official C++ robots.txt parser/matcher (Apache-2.0, stdlib-only runtime deps), so matching semantics equal Googlebot's; exposes `AgentAllowed` and `Sitemaps`. temoto/robotstxt is the other common choice and is fine, but grobotstxt's fidelity to Google's reference implementation is the tiebreaker. Fetch and cache `/robots.txt` per host; enforce `AgentAllowed` before every fetch; honor `Crawl-delay` where present as a floor on the per-host rate limiter; parse `Sitemap:` directives to seed the frontier. Respect robots by default; a `--ignore-robots` flag exists but prints a prominent warning and is off by default.
 - **Default rate limits:** 1 req/s per host, burst 3 (§5.3); global concurrency defaults conservative (8 static fetch / 2 browser).
-- **User-agent policy:** default UA identifies the tool and a contact URL (e.g. `magpie/1.0 (+https://github.com/you/gomagpie)`). Browser-like UAs are opt-in via config for sites that block generic bots; never impersonate by default.
+- **User-agent policy:** default UA identifies the tool and a contact URL (e.g. `magpie/1.0 (+https://github.com/you/magpie)`). Browser-like UAs are opt-in via config for sites that block generic bots; never impersonate by default.
 - **Explicitly out of scope (core):** no login-wall / paywall bypass, no CAPTCHA solving, no anti-bot evasion/stealth fingerprinting, no credential stuffing. These may only ever exist as user-supplied plugins, never in core. Aligned with the logged-out Amazon.fr constraint: the repricing consumer reads public price/facts only.
 
 ---
@@ -738,7 +738,7 @@ magpie cache inspect --domain amazon.fr
 
 ### Repo layout
 ```
-gomagpie/
+magpie/
 ├── cmd/magpie/main.go               # Cobra root, blank-imports built-in modules
 ├── core/                         # module registry, RegisterModule, ModuleInfo, version gate
 │   ├── registry.go
@@ -755,7 +755,7 @@ gomagpie/
 ├── extract/
 │   ├── extractor.go              # interface + repair loop
 │   ├── openai.go  anthropic.go  ollama.go
-│   ├── schema.go                 # x-gomagpie parsing, santhosh-tekuri validation
+│   ├── schema.go                 # x-magpie parsing, santhosh-tekuri validation
 │   └── cost.go
 ├── selector/
 │   ├── synth.go  validate.go  heal.go  cache.go

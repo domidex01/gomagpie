@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"gomagpie/fetch"
-	"gomagpie/vertical"
+	"magpie/fetch"
+	"magpie/vertical"
 )
 
 // fakeVerticalFetcher serves fixture bytes by URL substring; zero network.
@@ -261,7 +261,7 @@ func TestStaticFetcher_UserAgent(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if observed != "magpie/1.0 (+https://github.com/you/gomagpie)" {
+	if observed != "magpie/1.0 (+https://github.com/you/magpie)" {
 		t.Errorf("User-Agent = %q, want magpie UA", observed)
 	}
 }

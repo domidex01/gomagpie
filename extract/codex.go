@@ -13,7 +13,7 @@ import (
 )
 
 // CodexExecAdapter extracts via the user's own Codex CLI (`codex exec`).
-// Exec-only by design: gomagpie never touches subscription tokens — auth
+// Exec-only by design: magpie never touches subscription tokens — auth
 // stays between the user and their CLI login. Requires a current CLI with
 // --output-schema (native strict schema) and --json usage events.
 type CodexExecAdapter struct {
@@ -72,7 +72,7 @@ func (c *CodexExecAdapter) Extract(ctx context.Context, in ExtractInput) (Extrac
 	call := func(ctx context.Context, system, user string) (string, TokenUsage, error) {
 		return c.runOnce(ctx, system, user, doc)
 	}
-	// The CLI enforces shape via --output-schema; gomagpie still verifies
+	// The CLI enforces shape via --output-schema; magpie still verifies
 	// through the normal validate+coerce repair loop.
 	return runRepairLoop(ctx, call, c.Log, in, "codex", c.Model)
 }

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"gomagpie/extract"
+	"magpie/extract"
 
 	"github.com/PuerkitoBio/goquery"
 )

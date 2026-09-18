@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/clean"
+	"magpie/clean"
 )
 
 var update = flag.Bool("update", false, "regenerate golden files")

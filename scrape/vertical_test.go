@@ -11,11 +11,11 @@ import (
 	"sync"
 	"testing"
 
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	"gomagpie/scrape"
-	"gomagpie/selector"
-	"gomagpie/vertical"
+	"magpie/extract"
+	"magpie/fetch"
+	"magpie/scrape"
+	"magpie/selector"
+	"magpie/vertical"
 )
 
 // fakeVerticalFetcher is the 15-line scrape-side copy of the vertical fake

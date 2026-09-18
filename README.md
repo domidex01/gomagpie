@@ -1,4 +1,4 @@
-# gomagpie (`magpie`)
+# magpie (`magpie`)
 
 Go CLI web scraper: static fetch → JS detection → optional go-rod browser → trafilatura boilerplate removal → GFM markdown + JSON-LD sidecar → provider-agnostic LLM structured extraction. Pure-Go, zero CGO, single static binary.
 
@@ -18,12 +18,12 @@ go build -o magpie ./cmd/magpie
 echo "$HTML" | ./magpie extract --schema testdata/extract/price.yaml --content-type html
 
 # Config (keys redacted)
-GOMAGPIE_EXTRACT_PROVIDER=ollama ./magpie config show
+MAGPIE_EXTRACT_PROVIDER=ollama ./magpie config show
 ./magpie config set-key anthropic
 ```
 
-API keys resolve as: `--api-key` flag > `GOMAGPIE_<PROVIDER>_API_KEY` env > OS keyring > config file.
-(Dashes become underscores: `opencode-go` → `GOMAGPIE_OPENCODE_GO_API_KEY`.)
+API keys resolve as: `--api-key` flag > `MAGPIE_<PROVIDER>_API_KEY` env > OS keyring > config file.
+(Dashes become underscores: `opencode-go` → `MAGPIE_OPENCODE_GO_API_KEY`.)
 
 ## Providers
 
@@ -33,10 +33,10 @@ API keys resolve as: `--api-key` flag > `GOMAGPIE_<PROVIDER>_API_KEY` env > OS k
 | :-- | :-- | :-- | :-- |
 | `anthropic`, `openai` | API key | Metered, price table | Native structured output |
 | `ollama` | none (local) | Free | Base-URL switch on the OpenAI adapter |
-| `openrouter` | `GOMAGPIE_OPENROUTER_API_KEY` | Metered, costed from `usage.cost` | Sends `provider.require_parameters` + Referer/Title so the schema is enforced, not a hint |
+| `openrouter` | `MAGPIE_OPENROUTER_API_KEY` | Metered, costed from `usage.cost` | Sends `provider.require_parameters` + Referer/Title so the schema is enforced, not a hint |
 | `codex` | none — uses your logged-in Codex CLI | Your subscription | Shells out to `codex exec` (`--output-schema --ephemeral --ignore-user-config`); needs a current CLI, no API key, exempt from `--max-cost` |
-| `opencode-go` | `GOMAGPIE_OPENCODE_GO_API_KEY` | Flat plan, exempt from `--max-cost` | Flat-plan traffic is monitored for abuse — extraction is tiny, but if in doubt use Zen |
-| `opencode-zen` | `GOMAGPIE_OPENCODE_ZEN_API_KEY` | Pay-as-you-go credits (metered) | Same endpoints under `/zen/v1`; model prefix picks `/chat/completions` vs `/messages`; calls carry `x-opencode-session` + magpie UA |
+| `opencode-go` | `MAGPIE_OPENCODE_GO_API_KEY` | Flat plan, exempt from `--max-cost` | Flat-plan traffic is monitored for abuse — extraction is tiny, but if in doubt use Zen |
+| `opencode-zen` | `MAGPIE_OPENCODE_ZEN_API_KEY` | Pay-as-you-go credits (metered) | Same endpoints under `/zen/v1`; model prefix picks `/chat/completions` vs `/messages`; calls carry `x-opencode-session` + magpie UA |
 
 Claude models are reached via API key, OpenRouter, or Zen only — reusing a
 Claude Pro/Max subscription token outside Claude Code is banned by Anthropic.
@@ -71,13 +71,13 @@ Every fetch (static, robots, crawl) goes through one guarded transport:
   rejected before dialing — including on every redirect hop and again on
   the connected peer IP (DNS-rebind safe). Rejections wrap a typed
   sentinel and exit 2. `file://` URLs are gated behind
-  `GOMAGPIE_ALLOW_FILE=1`.
-- **Proxy pool — `GOMAGPIE_PROXY_FILE`** (wins over `GOMAGPIE_PROXY=http(s)://host:port`,
+  `MAGPIE_ALLOW_FILE=1`.
+- **Proxy pool — `MAGPIE_PROXY_FILE`** (wins over `MAGPIE_PROXY=http(s)://host:port`,
   which becomes a 1-entry pool; both win over the standard
   `HTTP_PROXY`/`HTTPS_PROXY` env, honored otherwise). One entry per line:
   `http(s)://`, `socks5://`/`socks5h://` (Tor on loopback works), or
   vendor-paste `host:port:user:pass`. `#` comments, blank lines skipped.
-  Strategies via `GOMAGPIE_PROXY_STRATEGY=round-robin` (default) or
+  Strategies via `MAGPIE_PROXY_STRATEGY=round-robin` (default) or
   `sticky-host`; `{{session}}` inside an entry resolves to a stable
   8-hex token per target host (rotating-gateway sticky sessions). A dead
   entry (dial/CONNECT failure — never an HTTP 4xx/5xx, which is a page
@@ -112,7 +112,7 @@ Sites that block the stock Go handshake pass. Notes:
   always use our header profiles (the impersonation transport only speaks
   TLS).
 - Every security property holds: pre-dial SSRF check, redirect
-  re-validation, peer-IP check, proxy policy (`GOMAGPIE_PROXY` tunnels
+  re-validation, peer-IP check, proxy policy (`MAGPIE_PROXY` tunnels
   browser connections via CONNECT; `NO_PROXY` bypasses), 50 MB cap.
 - Credits: [`North-web-dev/impersonate-http`](https://github.com/North-web-dev/impersonate-http)
   (MIT, wrapping `refraction-networking/utls`), verified against
@@ -136,13 +136,13 @@ otherwise base64 rides in `content`). The quality gate, `Clean`, and
 `Render` never change for `raw`/`screenshot` — the gate classifies
 before anything is emitted.
 
-**Search providers:** `brave` (`GOMAGPIE_BRAVE_API_KEY`), `serper`
-(`GOMAGPIE_SERPER_API_KEY`), `serpapi` (`GOMAGPIE_SERPAPI_API_KEY`), `exa`
-(`GOMAGPIE_EXA_API_KEY`) are BYOK; `searxng` needs only
-`GOMAGPIE_SEARXNG_URL` (your self-hosted instance, JSON format); `duckduckgo`
+**Search providers:** `brave` (`MAGPIE_BRAVE_API_KEY`), `serper`
+(`MAGPIE_SERPER_API_KEY`), `serpapi` (`MAGPIE_SERPAPI_API_KEY`), `exa`
+(`MAGPIE_EXA_API_KEY`) are BYOK; `searxng` needs only
+`MAGPIE_SEARXNG_URL` (your self-hosted instance, JSON format); `duckduckgo`
 (the default) needs nothing. Search rides the same guarded transport — SSRF
 guard and proxy pool included, with localhost/LAN endpoints allowed for the
-provider itself (it is operator-configured; `GOMAGPIE_SEARXNG_URL` on
+provider itself (it is operator-configured; `MAGPIE_SEARXNG_URL` on
 127.0.0.1 is the canonical setup). SERP hit URLs always scrape through the
 strict pipeline. Missing keys exit 7 with the set-key hint.
 
@@ -175,7 +175,7 @@ ones. `crawl_site` runs synchronously to completion (no background jobs),
 returns a `run_id`, and re-invoking it with that `run_id` reports stored
 status without touching the extractor.
 
-Claude Desktop config (`{ "mcpServers": { "gomagpie": {
+Claude Desktop config (`{ "mcpServers": { "magpie": {
 "command": "magpie", "args": ["serve"] } } }`):
 
 | Tool | Action |
@@ -211,9 +211,9 @@ otherwise hermetic.
 ## WASM plugins
 
 Untrusted `.wasm` transforms run in a wazero sandbox: exactly four host
-functions (`gomagpie_log`, `gomagpie_get_input`, `gomagpie_set_output`,
-`gomagpie_config_get`), WASI with zero preopened dirs (no filesystem,
+functions (`magpie_log`, `magpie_get_input`, `magpie_set_output`,
+`magpie_config_get`), WASI with zero preopened dirs (no filesystem,
 sockets, or env), version-gated against `core.CoreAPIVersion`. Guests
-export `gomagpie_api_version` and `run`. Full ABI contract:
+export `magpie_api_version` and `run`. Full ABI contract:
 `plugin/wasm/host.go`. TinyGo and Rust guests work (both import
 `wasi_snapshot_preview1`, which is linked but capability-free).

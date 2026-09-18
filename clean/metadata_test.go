@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/clean"
+	"magpie/clean"
 )
 
 func TestMetadata_Article(t *testing.T) {

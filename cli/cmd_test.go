@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/config"
+	"magpie/config"
 
 	"github.com/spf13/cobra"
 )
@@ -107,8 +107,8 @@ func newTestServer(t *testing.T, h http.Handler) string {
 func fakeLLM(t *testing.T, doc string) *fakeProvider {
 	t.Helper()
 	srv, fp := newFakeProvider(t, openAIEnvelope(doc))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
-	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "test-key")
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_OPENAI_API_KEY", "test-key")
 	return fp
 }
 
@@ -177,7 +177,7 @@ func TestCrawl_SecondRunZeroLLMCalls(t *testing.T) {
 	if err := runCrawl(t.Context(), seed, mkOpts(filepath.Join(t.TempDir(), "r1.jsonl"))); err != nil {
 		t.Fatalf("run1: %v", err)
 	}
-	dbPath := os.Getenv("GOMAGPIE_CACHE_DB")
+	dbPath := os.Getenv("MAGPIE_CACHE_DB")
 	db := mustOpenDB(t, dbPath)
 	n1, err := db.LLMCallCount("")
 	if err != nil {
@@ -199,7 +199,7 @@ func TestCrawl_ZeroRecordsExit3(t *testing.T) {
 	testEnv(t, "cache.db")
 	fakeLLM(t, `{"name":"Widget","price":12.99}`)
 	out := filepath.Join(t.TempDir(), "r.jsonl")
-	err := runCrawl(t.Context(), "file:///nonexistent-gomagpie.html", crawlCLIOptions{
+	err := runCrawl(t.Context(), "file:///nonexistent-magpie.html", crawlCLIOptions{
 		Schema: priceSchema(t), Format: "jsonl", Out: out,
 		MaxPages: 5, Concurrency: 2, SameHost: true, Rate: 1000,
 		Provider: "openai", Model: "gpt-4o-mini",
@@ -299,7 +299,7 @@ func TestCrawl_IgnoreRobotsWarns(t *testing.T) {
 func TestCrawl_MaxCostExit6(t *testing.T) {
 	testEnv(t, "cache.db")
 	fp := fakeLLM(t, `{"name":"Widget","price":12.99}`)
-	t.Setenv("GOMAGPIE_MAX_COST", "0.000001")
+	t.Setenv("MAGPIE_MAX_COST", "0.000001")
 	seed := writeFileSite(t, 1)
 	err := runCrawl(t.Context(), seed, crawlCLIOptions{
 		Schema: priceSchema(t), Format: "jsonl", Out: filepath.Join(t.TempDir(), "r.jsonl"),
@@ -439,7 +439,7 @@ func TestCrawl_FormatsCSVSQLiteJSON(t *testing.T) {
 	testEnv(t, "cache.db")
 	fakeLLM(t, `{"name":"Widget","price":12.99}`)
 	seed := writeFileSite(t, 1) // index + p0 = 2 pages
-	dbPath := os.Getenv("GOMAGPIE_CACHE_DB")
+	dbPath := os.Getenv("MAGPIE_CACHE_DB")
 	mkOpts := func(format, out string) crawlCLIOptions {
 		return crawlCLIOptions{
 			Schema: priceSchema(t), Format: format, Out: out,
@@ -548,7 +548,7 @@ func scrapeOne(t *testing.T, provider, model string) error {
 
 func TestProvider_UnknownErrors(t *testing.T) {
 	testEnv(t, "cache.db")
-	t.Setenv("GOMAGPIE_WAT_API_KEY", "x") // reach the switch past the key check
+	t.Setenv("MAGPIE_WAT_API_KEY", "x") // reach the switch past the key check
 	err := scrapeOne(t, "wat", "m")
 	if err == nil || !strings.Contains(err.Error(), "wat") {
 		t.Fatalf("expected error naming the provider, got %v (silent default bills Anthropic)", err)
@@ -561,8 +561,8 @@ func TestProvider_UnknownErrors(t *testing.T) {
 func TestProvider_CodexNeedsNoKey(t *testing.T) {
 	testEnv(t, "cache.db")
 	stubCodexCmd(t)
-	t.Setenv("GOMAGPIE_API_KEY", "")
-	t.Setenv("GOMAGPIE_CODEX_API_KEY", "")
+	t.Setenv("MAGPIE_API_KEY", "")
+	t.Setenv("MAGPIE_CODEX_API_KEY", "")
 	if err := scrapeOne(t, "codex", "gpt-5.2"); err != nil {
 		t.Fatalf("codex without key: %v (want keyless preflight+extract)", err)
 	}
@@ -571,7 +571,7 @@ func TestProvider_CodexNeedsNoKey(t *testing.T) {
 func TestProvider_OllamaNeedsNoKey(t *testing.T) {
 	testEnv(t, "cache.db")
 	srv, _ := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
 	if err := scrapeOne(t, "ollama", "llama3.1"); err != nil {
 		t.Fatalf("ollama without key: %v", err)
 	}
@@ -579,8 +579,8 @@ func TestProvider_OllamaNeedsNoKey(t *testing.T) {
 
 func TestProvider_OpenRouterNeedsKey(t *testing.T) {
 	testEnv(t, "cache.db")
-	t.Setenv("GOMAGPIE_API_KEY", "")
-	t.Setenv("GOMAGPIE_OPENROUTER_API_KEY", "")
+	t.Setenv("MAGPIE_API_KEY", "")
+	t.Setenv("MAGPIE_OPENROUTER_API_KEY", "")
 	if err := scrapeOne(t, "openrouter", "openai/gpt-4o-mini"); codeOf(err) != 7 {
 		t.Fatalf("exit = %d, want 7 (err=%v)", codeOf(err), err)
 	}
@@ -604,12 +604,12 @@ func TestProvider_DefaultModels(t *testing.T) {
 
 func TestSetKey_DashMessage(t *testing.T) {
 	if err := config.SetKey("opencode-go", "bogus"); err != nil {
-		if !strings.Contains(err.Error(), "GOMAGPIE_OPENCODE_GO_API_KEY") {
+		if !strings.Contains(err.Error(), "MAGPIE_OPENCODE_GO_API_KEY") {
 			t.Errorf("SetKey error = %q, want dash-to-underscore env name", err.Error())
 		}
 	}
 	// Read path uses the same transform (white-box: env name is the contract).
-	t.Setenv("GOMAGPIE_OPENCODE_GO_API_KEY", "k")
+	t.Setenv("MAGPIE_OPENCODE_GO_API_KEY", "k")
 	if got := (config.Config{}).APIKey("opencode-go"); got != "k" {
 		t.Errorf("APIKey(opencode-go) = %q, want env hit (dash→underscore)", got)
 	}
@@ -619,9 +619,9 @@ func TestMaxCost_FlatRateExempt(t *testing.T) {
 	// opencode-go leg: flat plan proceeds despite a near-zero ceiling.
 	testEnv(t, "cache.db")
 	srv, fp := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
-	t.Setenv("GOMAGPIE_OPENCODE_GO_API_KEY", "k")
-	t.Setenv("GOMAGPIE_MAX_COST", "0.000001")
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_OPENCODE_GO_API_KEY", "k")
+	t.Setenv("MAGPIE_MAX_COST", "0.000001")
 	if err := scrapeOne(t, "opencode-go", "glm-5.3"); err != nil {
 		t.Fatalf("opencode-go with tiny ceiling: %v (want exemption)", err)
 	}
@@ -631,17 +631,17 @@ func TestMaxCost_FlatRateExempt(t *testing.T) {
 	// codex leg: subscription spend proceeds too, keyless.
 	testEnv(t, "cache.db")
 	stubCodexCmd(t)
-	t.Setenv("GOMAGPIE_MAX_COST", "0.000001")
-	t.Setenv("GOMAGPIE_API_KEY", "")
+	t.Setenv("MAGPIE_MAX_COST", "0.000001")
+	t.Setenv("MAGPIE_API_KEY", "")
 	if err := scrapeOne(t, "codex", "gpt-5.2"); err != nil {
 		t.Fatalf("codex with tiny ceiling: %v (want exemption)", err)
 	}
 	// metered control: openai aborts pre-call with 0 hits.
 	testEnv(t, "cache.db")
 	srv2, fp2 := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
-	t.Setenv("GOMAGPIE_BASE_URL", srv2.URL)
-	t.Setenv("GOMAGPIE_OPENAI_API_KEY", "k")
-	t.Setenv("GOMAGPIE_MAX_COST", "0.000001")
+	t.Setenv("MAGPIE_BASE_URL", srv2.URL)
+	t.Setenv("MAGPIE_OPENAI_API_KEY", "k")
+	t.Setenv("MAGPIE_MAX_COST", "0.000001")
 	err := scrapeOne(t, "openai", "gpt-4o-mini")
 	if codeOf(err) != 6 {
 		t.Fatalf("exit = %d, want 6 (err=%v)", codeOf(err), err)
@@ -654,8 +654,8 @@ func TestMaxCost_FlatRateExempt(t *testing.T) {
 func TestOpenRouter_CostRow(t *testing.T) {
 	dbPath := testEnv(t, "cache.db")
 	srv, _ := newFakeProvider(t, openAIEnvelopeCost(`{"name":"Widget","price":12.99}`, 0.0042))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
-	t.Setenv("GOMAGPIE_OPENROUTER_API_KEY", "test-key")
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_OPENROUTER_API_KEY", "test-key")
 	if err := scrapeOne(t, "openrouter", "anthropic/claude-sonnet-4-6"); err != nil {
 		t.Fatalf("scrape: %v", err)
 	}
@@ -682,8 +682,8 @@ func TestZen_SessionHeaders(t *testing.T) {
 	// chat/completions leg on the Go base.
 	testEnv(t, "cache.db")
 	srv, fp := newFakeProvider(t, openAIEnvelope(`{"name":"Widget","price":12.99}`))
-	t.Setenv("GOMAGPIE_BASE_URL", srv.URL)
-	t.Setenv("GOMAGPIE_OPENCODE_GO_API_KEY", "k")
+	t.Setenv("MAGPIE_BASE_URL", srv.URL)
+	t.Setenv("MAGPIE_OPENCODE_GO_API_KEY", "k")
 	if err := scrapeOne(t, "opencode-go", "glm-5.3"); err != nil {
 		t.Fatalf("go chat leg: %v", err)
 	}
@@ -696,8 +696,8 @@ func TestZen_SessionHeaders(t *testing.T) {
 	// /messages leg on the Zen base (fresh DB: file-domain cache is per-DB).
 	testEnv(t, "cache.db")
 	srv2, fp2 := newFakeProvider(t, anthropicEnvelope(`{"name":"Widget","price":12.99}`))
-	t.Setenv("GOMAGPIE_BASE_URL", srv2.URL)
-	t.Setenv("GOMAGPIE_OPENCODE_ZEN_API_KEY", "k")
+	t.Setenv("MAGPIE_BASE_URL", srv2.URL)
+	t.Setenv("MAGPIE_OPENCODE_ZEN_API_KEY", "k")
 	if err := scrapeOne(t, "opencode-zen", "claude-sonnet-4-6"); err != nil {
 		t.Fatalf("zen messages leg: %v", err)
 	}
@@ -798,10 +798,10 @@ func closedPortCLI(t *testing.T) string {
 
 func TestScrape_PrivateExit2(t *testing.T) {
 	testEnv(t, "cache.db")
-	// GOMAGPIE_STRICT_SSRF=1 opts the test binary OUT of the test-binary
+	// MAGPIE_STRICT_SSRF=1 opts the test binary OUT of the test-binary
 	// relaxation, so the production-strict path is exercised end to end:
 	// pre-dial rejection, no listener needed (127.0.0.1:9 is unroutable).
-	t.Setenv("GOMAGPIE_STRICT_SSRF", "1")
+	t.Setenv("MAGPIE_STRICT_SSRF", "1")
 	err := runScrape(t.Context(), "http://127.0.0.1:9/", scrapeOptions{
 		Format: "json", Out: filepath.Join(t.TempDir(), "s.json"), Render: "static",
 	})
@@ -849,7 +849,7 @@ func TestCrawl_NoSitemapZeroFetch_CLI(t *testing.T) {
 // frozen at zero — the parse error precedes any request).
 func TestProxyFileFlag_MalformedExit2(t *testing.T) {
 	testEnv(t, "cache.db")
-	t.Setenv("GOMAGPIE_PROXY_FILE", "") // the flag's os.Setenv must not leak past this test
+	t.Setenv("MAGPIE_PROXY_FILE", "") // the flag's os.Setenv must not leak past this test
 	resetGlobals()
 	var originHits int
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -883,7 +883,7 @@ func TestProxyFileFlag_MalformedExit2(t *testing.T) {
 // proxy and the scrape exits 0.
 func TestProxyFileFlag_ValidServes(t *testing.T) {
 	testEnv(t, "cache.db")
-	t.Setenv("GOMAGPIE_PROXY_FILE", "") // the flag's os.Setenv must not leak past this test
+	t.Setenv("MAGPIE_PROXY_FILE", "") // the flag's os.Setenv must not leak past this test
 	resetGlobals()
 	var proxyHits int
 	proxied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -926,9 +926,9 @@ func mustURL(t *testing.T, raw string) *url.URL {
 // scrape's internal tests, the CLI contract is codes + hint text.
 func TestSearchCmd_Validation(t *testing.T) {
 	testEnv(t, "cache.db")
-	t.Setenv("GOMAGPIE_PROXY_FILE", "") // the flag's os.Setenv must not leak past this test
-	t.Setenv("GOMAGPIE_BRAVE_API_KEY", "")
-	t.Setenv("GOMAGPIE_API_KEY", "")
+	t.Setenv("MAGPIE_PROXY_FILE", "") // the flag's os.Setenv must not leak past this test
+	t.Setenv("MAGPIE_BRAVE_API_KEY", "")
+	t.Setenv("MAGPIE_API_KEY", "")
 
 	// Unknown provider → exit 2 naming the valid set.
 	resetGlobals()

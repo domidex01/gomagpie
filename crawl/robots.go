@@ -14,7 +14,7 @@ import (
 
 	"github.com/jimsmart/grobotstxt"
 
-	"gomagpie/fetch"
+	"magpie/fetch"
 )
 
 // ErrRobotsUnreachable marks a host whose robots.txt is 5xx or unfetchable.
@@ -36,11 +36,11 @@ type robotsEntry struct {
 	denyAll bool
 }
 
-const robotsUA = "magpie/1.0 (+https://github.com/you/gomagpie)"
+const robotsUA = "magpie/1.0 (+https://github.com/you/magpie)"
 
 // NewChecker builds a Checker with the bare product token derived from the UA.
 // The client shares fetch.GuardedTransport: robots fetches honor
-// GOMAGPIE_PROXY and the SSRF dial guard like every other request.
+// MAGPIE_PROXY and the SSRF dial guard like every other request.
 func NewChecker() *Checker {
 	return &Checker{
 		client: &http.Client{Timeout: 10 * time.Second, Transport: fetch.GuardedTransport()},

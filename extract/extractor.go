@@ -135,8 +135,8 @@ func isTruncation(err error) bool {
 // SessionHeader identifies the run to OpenCode Zen/Go (required server-side).
 const SessionHeader = "x-opencode-session"
 
-// MagpieUA identifies gomagpie on Zen/Go calls (required alongside SessionHeader).
-const MagpieUA = "magpie (+https://github.com/you/gomagpie)"
+// MagpieUA identifies magpie on Zen/Go calls (required alongside SessionHeader).
+const MagpieUA = "magpie (+https://github.com/you/magpie)"
 
 // schemaDoc round-trips a schema through JSON so providers get a plain
 // map without yaml-node types.

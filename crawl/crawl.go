@@ -12,12 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gomagpie/clean"
-	"gomagpie/core"
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	"gomagpie/selector"
-	"gomagpie/store"
+	"magpie/clean"
+	"magpie/core"
+	"magpie/extract"
+	"magpie/fetch"
+	"magpie/selector"
+	"magpie/store"
 )
 
 // ErrRobotsBlocked marks a crawl refused by robots.txt (deny or unreachable).

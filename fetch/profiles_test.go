@@ -11,7 +11,7 @@ import (
 
 	impersonate "github.com/North-web-dev/impersonate-http"
 
-	"gomagpie/fetch"
+	"magpie/fetch"
 )
 
 type challengeHits struct {

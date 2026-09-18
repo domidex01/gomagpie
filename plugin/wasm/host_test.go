@@ -160,13 +160,13 @@ var (
 )
 
 // happyGuest echoes its input via get_input/set_output and logs once.
-// ver tunes gomagpie_api_version (10000 = core 1.0.0).
+// ver tunes magpie_api_version (10000 = core 1.0.0).
 func happyGuest(ver int32) []byte {
 	types := [][]byte{tVoidI32, tLog, tGetInput, tSetOut}
 	imps := []imp{
-		{"gomagpie", "gomagpie_log", 0, 1},
-		{"gomagpie", "gomagpie_get_input", 0, 2},
-		{"gomagpie", "gomagpie_set_output", 0, 3},
+		{"magpie", "magpie_log", 0, 1},
+		{"magpie", "magpie_get_input", 0, 2},
+		{"magpie", "magpie_set_output", 0, 3},
 	}
 	run := body(none,
 		i32c(1), i32c(0x2000), i32c(5), call(0), // log(1, "hello")
@@ -175,7 +175,7 @@ func happyGuest(ver int32) []byte {
 	)
 	verf := body(none, i32c(ver))
 	return encodeModule(types, imps, []uint32{0, 0}, [][]byte{run, verf},
-		[]exp{{"gomagpie_api_version", 0, 4}, {"run", 0, 3}},
+		[]exp{{"magpie_api_version", 0, 4}, {"run", 0, 3}},
 		1, []seg{{0x2000, []byte("hello")}})
 }
 
@@ -217,7 +217,7 @@ func TestWASM_VersionGate(t *testing.T) {
 
 func TestWASM_NotAPlugin(t *testing.T) {
 	types := [][]byte{tVoidI32, tSetOut}
-	imps := []imp{{"gomagpie", "gomagpie_set_output", 0, 1}}
+	imps := []imp{{"magpie", "magpie_set_output", 0, 1}}
 	run := body(none, i32c(0x1000), i32c(1), call(0), i32c(0))
 	mod := encodeModule(types, imps, []uint32{0}, [][]byte{run},
 		[]exp{{"run", 0, 1}}, 1, []seg{{0x1000, []byte("x")}})
@@ -225,16 +225,16 @@ func TestWASM_NotAPlugin(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewRunner(no version export) = nil, want reject")
 	}
-	if !strings.Contains(err.Error(), "not a gomagpie plugin") {
-		t.Errorf("error %q does not say not a gomagpie plugin", err)
+	if !strings.Contains(err.Error(), "not a magpie plugin") {
+		t.Errorf("error %q does not say not a magpie plugin", err)
 	}
 }
 
 func TestWASM_SockDeny(t *testing.T) {
 	types := [][]byte{tVoidI32, tLog, tSetOut, tSockSend}
 	imps := []imp{
-		{"gomagpie", "gomagpie_log", 0, 1},
-		{"gomagpie", "gomagpie_set_output", 0, 2},
+		{"magpie", "magpie_log", 0, 1},
+		{"magpie", "magpie_set_output", 0, 2},
 		{"wasi_snapshot_preview1", "sock_send", 0, 3},
 	}
 	run := body(none,
@@ -245,7 +245,7 @@ func TestWASM_SockDeny(t *testing.T) {
 	)
 	ver := body(none, i32c(10000))
 	mod := encodeModule(types, imps, []uint32{0, 0}, [][]byte{run, ver},
-		[]exp{{"gomagpie_api_version", 0, 4}, {"run", 0, 3}},
+		[]exp{{"magpie_api_version", 0, 4}, {"run", 0, 3}},
 		1, []seg{{0x1000, []byte("x")}})
 	r := newTestRunner(t, mod)
 	if _, err := r.Transform(context.Background(), []byte("{}")); err != nil {
@@ -269,8 +269,8 @@ func TestWASM_SockDeny(t *testing.T) {
 func TestWASM_EnvDeny(t *testing.T) {
 	types := [][]byte{tVoidI32, tLog, tSetOut, tEnvSizes}
 	imps := []imp{
-		{"gomagpie", "gomagpie_log", 0, 1},
-		{"gomagpie", "gomagpie_set_output", 0, 2},
+		{"magpie", "magpie_log", 0, 1},
+		{"magpie", "magpie_set_output", 0, 2},
 		{"wasi_snapshot_preview1", "environ_sizes_get", 0, 3},
 	}
 	run := body(none,
@@ -282,7 +282,7 @@ func TestWASM_EnvDeny(t *testing.T) {
 	)
 	ver := body(none, i32c(10000))
 	mod := encodeModule(types, imps, []uint32{0, 0}, [][]byte{run, ver},
-		[]exp{{"gomagpie_api_version", 0, 4}, {"run", 0, 3}},
+		[]exp{{"magpie_api_version", 0, 4}, {"run", 0, 3}},
 		1, []seg{{0x1000, []byte("x")}})
 	r := newTestRunner(t, mod)
 	if _, err := r.Transform(context.Background(), []byte("{}")); err != nil {
@@ -305,8 +305,8 @@ func TestWASM_FSDeny(t *testing.T) {
 	pathBytes := []byte(victim)
 	types := [][]byte{tVoidI32, tLog, tSetOut, tPathOpen}
 	imps := []imp{
-		{"gomagpie", "gomagpie_log", 0, 1},
-		{"gomagpie", "gomagpie_set_output", 0, 2},
+		{"magpie", "magpie_log", 0, 1},
+		{"magpie", "magpie_set_output", 0, 2},
 		{"wasi_snapshot_preview1", "path_open", 0, 3},
 	}
 	run := body(none,
@@ -318,7 +318,7 @@ func TestWASM_FSDeny(t *testing.T) {
 	)
 	ver := body(none, i32c(10000))
 	mod := encodeModule(types, imps, []uint32{0, 0}, [][]byte{run, ver},
-		[]exp{{"gomagpie_api_version", 0, 4}, {"run", 0, 3}},
+		[]exp{{"magpie_api_version", 0, 4}, {"run", 0, 3}},
 		1, []seg{{0x1000, pathBytes}, {0x2000, []byte("x")}})
 	r := newTestRunner(t, mod)
 	if _, err := r.Transform(context.Background(), []byte("{}")); err != nil {
@@ -368,8 +368,8 @@ func TestWASM_CanceledCtx(t *testing.T) {
 func TestWASM_ConfigGet(t *testing.T) {
 	types := [][]byte{tVoidI32, tCfgGet, tSetOut}
 	imps := []imp{
-		{"gomagpie", "gomagpie_config_get", 0, 1},
-		{"gomagpie", "gomagpie_set_output", 0, 2},
+		{"magpie", "magpie_config_get", 0, 1},
+		{"magpie", "magpie_set_output", 0, 2},
 	}
 	run := body(none,
 		i32c(0x1000), i32c(3), call(0), // config_get("key") -> (ptr,len)
@@ -378,7 +378,7 @@ func TestWASM_ConfigGet(t *testing.T) {
 	)
 	ver := body(none, i32c(10000))
 	mod := encodeModule(types, imps, []uint32{0, 0}, [][]byte{run, ver},
-		[]exp{{"gomagpie_api_version", 0, 3}, {"run", 0, 2}},
+		[]exp{{"magpie_api_version", 0, 3}, {"run", 0, 2}},
 		1, []seg{{0x1000, []byte("key")}})
 	r, err := newRunnerWithConfig(context.Background(), mod, map[string]string{"key": "val"}, 0, 0)
 	if err != nil {

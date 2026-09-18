@@ -29,7 +29,7 @@ func renderMain(with []string) (string, error) {
 
 import (
 {{range .}}	_ "{{.}}"
-{{end}}	"gomagpie/cli"
+{{end}}	"magpie/cli"
 	"os"
 )
 
@@ -45,7 +45,7 @@ func main() {
 	return sb.String(), nil
 }
 
-// Build codegens a temp module (replace gomagpie => repo root, blank
+// Build codegens a temp module (replace magpie => repo root, blank
 // --with imports, cli.Execute()) and runs go build there.
 func Build(ctx context.Context, o BuildOptions) error {
 	if o.Output == "" {
@@ -56,7 +56,7 @@ func Build(ctx context.Context, o BuildOptions) error {
 			return fmt.Errorf("build: --with %q must be module@version (bare paths silently resolve to latest)", w)
 		}
 	}
-	root, err := gomagpieRoot(ctx)
+	root, err := magpieRoot(ctx)
 	if err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func Build(ctx context.Context, o BuildOptions) error {
 	if err := run("go", "mod", "init", "magpie-custom"); err != nil {
 		return err
 	}
-	if err := run("go", "mod", "edit", "-require=gomagpie@v0.0.0", "-replace=gomagpie="+root); err != nil {
+	if err := run("go", "mod", "edit", "-require=magpie@v0.0.0", "-replace=magpie="+root); err != nil {
 		return err
 	}
 	for mod, path := range o.Replaces {
@@ -130,17 +130,17 @@ func Build(ctx context.Context, o BuildOptions) error {
 	return nil
 }
 
-// gomagpieRoot resolves the gomagpie source dir for the replace directive:
-// `go list -m` on the main module first, GOMAGPIE_REPO_ROOT override otherwise.
-func gomagpieRoot(ctx context.Context) (string, error) {
-	if v := os.Getenv("GOMAGPIE_REPO_ROOT"); v != "" {
+// magpieRoot resolves the magpie source dir for the replace directive:
+// `go list -m` on the main module first, MAGPIE_REPO_ROOT override otherwise.
+func magpieRoot(ctx context.Context) (string, error) {
+	if v := os.Getenv("MAGPIE_REPO_ROOT"); v != "" {
 		return v, nil
 	}
-	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Dir}}", "gomagpie")
+	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Dir}}", "magpie")
 	if out, err := cmd.Output(); err == nil {
 		if dir := strings.TrimSpace(string(out)); dir != "" {
 			return dir, nil
 		}
 	}
-	return "", fmt.Errorf("build: cannot locate gomagpie source (set GOMAGPIE_REPO_ROOT)")
+	return "", fmt.Errorf("build: cannot locate magpie source (set MAGPIE_REPO_ROOT)")
 }

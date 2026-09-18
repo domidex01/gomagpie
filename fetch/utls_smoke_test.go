@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"gomagpie/fetch"
+	"magpie/fetch"
 )
 
 const (

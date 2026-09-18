@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"gomagpie/clean"
-	"gomagpie/crawl"
-	"gomagpie/extract"
-	"gomagpie/fetch"
-	"gomagpie/selector"
-	"gomagpie/store"
-	"gomagpie/vertical"
+	"magpie/clean"
+	"magpie/crawl"
+	"magpie/extract"
+	"magpie/fetch"
+	"magpie/selector"
+	"magpie/store"
+	"magpie/vertical"
 )
 
 // ErrMissingKey marks a schema extraction without credentials (CLI maps to exit 7).

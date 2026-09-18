@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gomagpie/scrape"
+	"magpie/scrape"
 )
 
 // words builds n distinct words for boundary rows — generated, never fixtures.

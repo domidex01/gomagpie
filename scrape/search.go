@@ -21,7 +21,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"gomagpie/fetch"
+	"magpie/fetch"
 )
 
 // SearchHit is one SERP result.
@@ -128,7 +128,7 @@ func Search(ctx context.Context, d Deps, query string, o SearchOptions) ([]Searc
 	}
 	// ponytail: the transport opts into AllowPrivate because every peer
 	// of this client is operator-chosen (fixed provider endpoints or
-	// GOMAGPIE_SEARXNG_URL) — a local searxng is the canonical zero-key
+	// MAGPIE_SEARXNG_URL) — a local searxng is the canonical zero-key
 	// deployment. Hit URLs from the SERP never dial through this client;
 	// scrape-top goes through scrape.Run's strict fetcher.
 	client := &http.Client{Transport: fetch.GuardedTransportWithOptions(fetch.SSRFOptions{AllowPrivate: true}), Timeout: 15 * time.Second}
@@ -290,9 +290,9 @@ func searchSerpAPI(ctx context.Context, c *http.Client, query string, limit int)
 }
 
 func searchSearXNG(ctx context.Context, c *http.Client, query string, limit int) ([]SearchHit, error) {
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("GOMAGPIE_SEARXNG_URL")), "/")
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("MAGPIE_SEARXNG_URL")), "/")
 	if base == "" {
-		return nil, fmt.Errorf("GOMAGPIE_SEARXNG_URL is not set (searxng needs a self-hosted instance; it is the zero-key path)")
+		return nil, fmt.Errorf("MAGPIE_SEARXNG_URL is not set (searxng needs a self-hosted instance; it is the zero-key path)")
 	}
 	qs := []queryKey{{"q", query}, {"format", "json"}}
 	req, err := searchRequest(ctx, http.MethodGet, base+"/search", qs...)
