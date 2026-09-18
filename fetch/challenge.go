@@ -40,6 +40,7 @@ var challengeBodySignatures = []struct {
 	{vendor: "cloudflare", markers: []string{"/h/g/orchestrate/"}},
 	{vendor: "turnstile", markers: []string{"challenges.cloudflare.com/turnstile"}},
 	{vendor: "datadome", markers: []string{"datadome", "captcha"}},
+	{vendor: "datadome", markers: []string{"datadome", "geo"}},
 	{vendor: "awswaf", markers: []string{"awswaf"}},
 	{vendor: "hcaptcha", markers: []string{"h-captcha", "verify"}},
 	{vendor: "hcaptcha", markers: []string{"h-captcha", "blocked"}},

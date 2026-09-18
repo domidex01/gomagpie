@@ -22,8 +22,10 @@ type FetchResponse struct {
 	StatusCode int
 	HTML       []byte
 	Headers    http.Header
-	// Proxy is the redacted host:port of the proxy entry that served
-	// this response (pool or GOMAGPIE_PROXY); "" when direct.
+	// Proxy is the redacted host:port of the pool/GOMAGPIE_PROXY entry
+	// that served this response; "" when direct. Pools rotate per
+	// request (and per redirect hop), so this is the entry that served
+	// the final hop — a rotation audit trail it is not.
 	Proxy string
 }
 

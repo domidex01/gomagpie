@@ -199,13 +199,15 @@ func (s *StaticFetcher) Fetch(ctx context.Context, req FetchRequest) (*FetchResp
 	// are exactly the blocked-page case. Untyped challenge bodies on a
 	// bare request keep the old passthrough contract (quality gate owns
 	// them); clean pages never warm up.
-	empersonated := req.Profile != "" || req.Browser != "" || vendor != ""
-	if !classified || !empersonated {
+	impersonated := req.Profile != "" || req.Browser != "" || vendor != ""
+	if !classified || !impersonated {
 		return resp, nil
 	}
 	if home := homepageOf(req.URL); home != "" {
 		_, _ = s.do(ctx, FetchRequest{URL: home, Timeout: req.Timeout, Profile: req.Profile, Cookies: req.Cookies, Browser: req.Browser}) //nolint:errcheck // warmup best-effort; retry proceeds regardless
 	}
+	// The retry is a single attempt by design: it is already the second
+	// chance after a response arrived, so egress failover does not apply.
 	retry, rerr := s.do(ctx, req)
 	if rerr != nil {
 		return nil, rerr
@@ -230,11 +232,13 @@ func (s *StaticFetcher) doWithFailover(ctx context.Context, req FetchRequest) (*
 	for i := 0; ; i++ {
 		ref := &pickRef{}
 		resp, err = s.do(context.WithValue(ctx, pickKey{}, ref), req)
+		if err != nil && isEgressError(err) {
+			if p, idx, _ := ref.chosen(); p != nil {
+				p.reportFailure(idx)
+			}
+		}
 		if err == nil || i+1 >= attempts || !isEgressError(err) {
 			return resp, err
-		}
-		if p, idx, _ := ref.chosen(); p != nil {
-			p.reportFailure(idx)
 		}
 	}
 }
@@ -265,8 +269,14 @@ func (s *StaticFetcher) do(ctx context.Context, req FetchRequest) (*FetchRespons
 	timeout := budget(req)
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	ref := &pickRef{}
-	cctx = context.WithValue(cctx, pickKey{}, ref)
+	// Reuse a caller-injected pickRef (doWithFailover) so failed picks are
+	// reported and successes surface the serving entry; create one only
+	// for bare do() calls (warmup, smoke tests).
+	ref := pickRefFrom(ctx)
+	if ref == nil {
+		ref = &pickRef{}
+		cctx = context.WithValue(cctx, pickKey{}, ref)
+	}
 	client, err := s.clientFor(req)
 	if err != nil {
 		return nil, err

@@ -8,6 +8,7 @@ package fetch
 
 import (
 	"errors"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -360,5 +361,50 @@ func TestBuildPool_StrategyValidation(t *testing.T) {
 		t.Error("unknown strategy must fail loud")
 	} else if !errors.Is(err, ErrProxyConfig) {
 		t.Errorf("err = %v, want ErrProxyConfig wrap", err)
+	}
+}
+
+// TestPool_FailoverMarksCooldown pins the END-TO-END wiring: a failed
+// pooled fetch must put every dead entry on cooldown through
+// doWithFailover → reportFailure. Regression for the pickRef-shadowing
+// bug where do() overwrote the caller's ref and reportFailure was
+// unreachable (failover only worked by round-robin coincidence).
+func TestPool_FailoverMarksCooldown(t *testing.T) {
+	deadPort := func() string {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := l.Addr().String()
+		if err := l.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	poolPath := filepath.Join(t.TempDir(), "pool.txt")
+	content := "http://" + deadPort() + "\nhttp://" + deadPort() + "\n"
+	if err := os.WriteFile(poolPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOMAGPIE_PROXY", "")
+	t.Setenv("GOMAGPIE_PROXY_FILE", poolPath)
+	t.Setenv("GOMAGPIE_PROXY_STRATEGY", "")
+	t.Setenv("NO_PROXY", "")
+	s, err := NewStaticFetcherWithOptions(SSRFOptions{AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := currentPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ferr := s.doWithFailover(t.Context(), FetchRequest{URL: "http://" + deadPort() + "/x"})
+	if ferr == nil {
+		t.Fatal("all-dead pool must error")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.dead) != 2 {
+		t.Fatalf("cooldown map = %v, want BOTH entries marked by the real fetch path", p.dead)
 	}
 }

@@ -136,12 +136,21 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 	if err != nil {
 		return keyHint(err) // exitFor owns the code mapping
 	}
-	// Screenshot --out is the PNG itself, not a JSON envelope around it.
-	if o.PageFormat == "screenshot" && cfg.Out != "" {
-		if err := os.WriteFile(cfg.Out, res.ScreenshotPNG, 0o644); err != nil {
-			return fmt.Errorf("write out: %w", err)
+	// Screenshot owns its whole output contract in one place: --out
+	// writes the raw PNG; without it the base64 rides in a JSON envelope
+	// (same shape the MCP tool returns) — never silently dropped.
+	if o.PageFormat == "screenshot" {
+		if cfg.Out != "" {
+			if err := os.WriteFile(cfg.Out, res.ScreenshotPNG, 0o644); err != nil {
+				return fmt.Errorf("write out: %w", err)
+			}
+			return nil
 		}
-		return nil
+		sdoc, merr := screenshotDoc(res)
+		if merr != nil {
+			return merr
+		}
+		return writeOut(cfg.Out, sdoc)
 	}
 	if res.Vertical != "" {
 		vdoc, merr := verticalDoc(res)
@@ -228,6 +237,18 @@ func verticalDoc(r scrape.Result) (string, error) {
 		Vertical string         `json:"vertical"`
 		Record   map[string]any `json:"record"`
 	}{r.URL, r.FinalURL, r.Title, r.Vertical, r.Record}, "scrape")
+}
+
+// screenshotDoc renders the screenshot output when --out is absent: the
+// base64 PNG in content, mirroring the MCP envelope (raw bytes only
+// ever travel via --out).
+func screenshotDoc(r scrape.Result) (string, error) {
+	return marshalOut(struct {
+		URL      string `json:"url"`
+		FinalURL string `json:"final_url"`
+		Format   string `json:"page_format"`
+		Content  string `json:"content"`
+	}{r.URL, r.FinalURL, "screenshot", r.Rendered}, "scrape")
 }
 
 func orEmpty(r json.RawMessage) json.RawMessage {
