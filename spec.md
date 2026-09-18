@@ -625,6 +625,9 @@ magpie
 │     --transport stdio|http  (default stdio)  --addr :8080
 ├── build                     xcaddy-style custom-binary compiler
 │     --with <module@version> (repeatable)  --output <file>
+├── tui                       Interactive run form → live progress → record / markdown browser+editor
+│     --mouse=true|false       mouse click-select + wheel scroll (default true on TTY;
+│                              keyboard-first: every action has a keybinding; see plan/phase-4-tui.md)
 ├── cache
 │     ├── inspect [--domain d] [--schema-hash h]   Show cached selectors + null-rates
 │     ├── clear   [--domain d]                     Evict entries
@@ -718,6 +721,7 @@ gomagpie/
 ├── config/
 │   ├── config.go  keyring.go     # zalando/go-keyring
 ├── build/                        # xcaddy-style compiler for `magpie build`
+├── tui/                           # Bubble Tea interactive UI (Phase 4; see plan/phase-4-tui.md)
 └── testdata/
 ```
 
