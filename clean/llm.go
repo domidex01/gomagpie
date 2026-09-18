@@ -360,7 +360,9 @@ func ToText(md string) string {
 }
 
 // Render renders a CleanedPage in the named format: ""/markdown = identity,
-// llm = ToLLMText, text = ToText, json = page envelope.
+// llm = ToLLMText, text = ToText, json = page envelope, html = the cleaned
+// (scope-applied) document — PDFs have none, so their markdown rides in a
+// minimal <article> wrapper instead.
 func Render(p CleanedPage, format string) (string, error) {
 	switch format {
 	case "", "markdown":
@@ -371,8 +373,13 @@ func Render(p CleanedPage, format string) (string, error) {
 		return ToText(p.Markdown), nil
 	case "json":
 		return renderJSON(p), nil
+	case "html":
+		if p.HTML != "" {
+			return p.HTML, nil
+		}
+		return "<article>\n" + p.Markdown + "\n</article>\n", nil
 	default:
-		return "", fmt.Errorf("clean: page format %q must be markdown|llm|text|json", format)
+		return "", fmt.Errorf("clean: page format %q must be markdown|llm|text|json|html", format)
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +20,7 @@ import (
 )
 
 func resetGlobals() {
-	cfgFile, cacheDB, apiKey = "", "", ""
+	cfgFile, cacheDB, apiKey, proxyFile = "", "", "", ""
 	maxCost = 0
 }
 
@@ -838,4 +840,151 @@ func TestCrawl_NoSitemapZeroFetch_CLI(t *testing.T) {
 	if sitemapHits != 0 {
 		t.Errorf("sitemap hits = %d, want 0 with --no-sitemap", sitemapHits)
 	}
+}
+
+// --- Phase G: --proxy-file flag + search command. ---
+
+// TestProxyFileFlag_MalformedExit2: a malformed pool file fails with
+// exit 2 naming the line number, and nothing is dialed (origin counter
+// frozen at zero — the parse error precedes any request).
+func TestProxyFileFlag_MalformedExit2(t *testing.T) {
+	testEnv(t, "cache.db")
+	t.Setenv("GOMAGPIE_PROXY_FILE", "") // the flag's os.Setenv must not leak past this test
+	resetGlobals()
+	var originHits int
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		originHits++
+		_, _ = w.Write([]byte("never served")) //nolint:errcheck // test server
+	}))
+	t.Cleanup(origin.Close)
+	pool := filepath.Join(t.TempDir(), "pool.txt")
+	if err := os.WriteFile(pool, []byte("# header\nhttp://ok.example:3128\nnot-a-proxy-line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := rootCmd()
+	root.SetArgs([]string{"scrape", origin.URL, "--render", "static", "--proxy-file", pool})
+	var err error
+	captureOutput(t, func() {
+		err = root.Execute()
+	})
+	if codeOf(err) != 2 {
+		t.Fatalf("exit = %d, want 2 (err=%v)", codeOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "line 3") {
+		t.Errorf("err = %v, want the pool line number", err)
+	}
+	if originHits != 0 {
+		t.Errorf("origin hits = %d, want 0 (malformed pool fails pre-I/O)", originHits)
+	}
+	resetGlobals()
+}
+
+// TestProxyFileFlag_ValidServes: a valid single-entry pool rides the
+// proxy and the scrape exits 0.
+func TestProxyFileFlag_ValidServes(t *testing.T) {
+	testEnv(t, "cache.db")
+	t.Setenv("GOMAGPIE_PROXY_FILE", "") // the flag's os.Setenv must not leak past this test
+	resetGlobals()
+	var proxyHits int
+	proxied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits++
+		p := httputil.NewSingleHostReverseProxy(mustURL(t, "http://"+r.Host))
+		p.ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxied.Close)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<html><head><title>via pool</title></head><body><p>" + strings.Repeat("honest descriptive prose for the cleaner ", 20) + "</p></body></html>")) //nolint:errcheck // test server
+	}))
+	t.Cleanup(origin.Close)
+	pool := filepath.Join(t.TempDir(), "pool.txt")
+	if err := os.WriteFile(pool, []byte("http://"+strings.TrimPrefix(proxied.URL, "http://")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := rootCmd()
+	root.SetArgs([]string{"scrape", origin.URL, "--render", "static", "--proxy-file", pool})
+	captureOutput(t, func() {
+		if err := root.Execute(); err != nil {
+			t.Errorf("scrape with pool: %v", err)
+		}
+	})
+	if proxyHits == 0 {
+		t.Error("proxy hits = 0, want ≥1 (the pool must serve the request)")
+	}
+	resetGlobals()
+}
+
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+// TestSearchCmd_Validation: exits only — the endpoint seam lives in
+// scrape's internal tests, the CLI contract is codes + hint text.
+func TestSearchCmd_Validation(t *testing.T) {
+	testEnv(t, "cache.db")
+	t.Setenv("GOMAGPIE_PROXY_FILE", "") // the flag's os.Setenv must not leak past this test
+	t.Setenv("GOMAGPIE_BRAVE_API_KEY", "")
+	t.Setenv("GOMAGPIE_API_KEY", "")
+
+	// Unknown provider → exit 2 naming the valid set.
+	resetGlobals()
+	root := rootCmd()
+	root.SetArgs([]string{"search", "q", "--provider", "altavista"})
+	var err error
+	captureOutput(t, func() {
+		err = root.Execute()
+	})
+	if codeOf(err) != 2 {
+		t.Errorf("bogus provider exit = %d, want 2 (err=%v)", codeOf(err), err)
+	}
+	for _, p := range []string{"brave", "duckduckgo", "searxng"} {
+		if !strings.Contains(err.Error(), p) {
+			t.Errorf("err %q must name %q", err, p)
+		}
+	}
+	resetGlobals()
+
+	// Missing key → exit 7 with the set-key hint.
+	root2 := rootCmd()
+	root2.SetArgs([]string{"search", "q", "--provider", "brave"})
+	_, stderr2 := captureOutput(t, func() {
+		err = root2.Execute()
+	})
+	if codeOf(err) != 7 {
+		t.Errorf("missing-key exit = %d, want 7 (err=%v)", codeOf(err), err)
+	}
+	if !strings.Contains(stderr2, "api-key") {
+		t.Errorf("stderr = %q, want the set-key hint", stderr2)
+	}
+	resetGlobals()
+
+	// Negative scrape-top → exit 2.
+	root3 := rootCmd()
+	root3.SetArgs([]string{"search", "q", "--scrape-top", "-1"})
+	captureOutput(t, func() {
+		err = root3.Execute()
+	})
+	if codeOf(err) != 2 {
+		t.Errorf("scrape-top -1 exit = %d, want 2", codeOf(err))
+	}
+	resetGlobals()
+
+	// Help lists the flags (contract surface for docs/GUI).
+	root4 := rootCmd()
+	root4.SetArgs([]string{"search", "--help"})
+	out, _ := captureOutput(t, func() {
+		if err := root4.Execute(); err != nil {
+			t.Errorf("help: %v", err)
+		}
+	})
+	for _, want := range []string{"--provider", "--limit", "--scrape-top", "--out"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help missing %q", want)
+		}
+	}
+	resetGlobals()
 }

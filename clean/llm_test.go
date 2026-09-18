@@ -130,8 +130,24 @@ func TestRender_Matrix(t *testing.T) {
 		t.Errorf("Render(markdown) identity failed: %v", err)
 	}
 	if _, err := clean.Render(got, "bogus"); err == nil ||
-		!strings.Contains(err.Error(), "markdown|llm|text|json") {
+		!strings.Contains(err.Error(), "markdown|llm|text|json|html") {
 		t.Errorf("Render(bogus) = %v, want valid-values error", err)
+	}
+	// Phase G: html returns the cleaned (scope-applied) document verbatim.
+	if out, err := clean.Render(got, "html"); err != nil || out != got.HTML {
+		t.Errorf("Render(html) = %d bytes, err %v; want the CleanedPage.HTML verbatim", len(out), err)
+	}
+	if got.HTML == "" {
+		t.Error("article page must carry a non-empty HTML field")
+	}
+	// PDF pages have no HTML: markdown rides in the <article> wrapper.
+	pdf := clean.CleanedPage{Markdown: "extracted pdf text"}
+	wrapper, err := clean.Render(pdf, "html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "<article>\nextracted pdf text\n</article>\n"; wrapper != want {
+		t.Errorf("PDF html wrapper = %q, want %q", wrapper, want)
 	}
 	out, err := clean.Render(got, "json")
 	if err != nil {

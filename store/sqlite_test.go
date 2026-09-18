@@ -377,3 +377,45 @@ func TestLogFetch_RoundTrip(t *testing.T) {
 		t.Errorf("fresh counters = %d/%d/%d, want 0/0/0", info.FetchPages, info.FetchBytes, info.FetchMs)
 	}
 }
+
+// TestMigration_AddsProxyColumn (Phase G G.1): the pre-G schema upgrades
+// in place; the default is ” for non-pooled runs and SetRunProxy
+// round-trips a redacted host:port.
+func TestMigration_AddsProxyColumn(t *testing.T) {
+	path := openPreDDB(t)
+	db, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open(pre-G db): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	info, err := db.GetRun("pre-d-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Proxy != "" {
+		t.Errorf("migrated row proxy = %q, want ''", info.Proxy)
+	}
+	if err := db.SetRunProxy("pre-d-run", "127.0.0.1:9050"); err != nil {
+		t.Fatalf("SetRunProxy: %v", err)
+	}
+	if info, err = db.GetRun("pre-d-run"); err != nil {
+		t.Fatal(err)
+	}
+	if info.Proxy != "127.0.0.1:9050" {
+		t.Errorf("proxy = %q, want 127.0.0.1:9050", info.Proxy)
+	}
+	// Fresh runs default to '' (direct, never pooled).
+	if err := db.BeginRun("g-run", "scrape"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err = db.GetRun("g-run"); err != nil {
+		t.Fatal(err)
+	}
+	if info.Proxy != "" {
+		t.Errorf("fresh run proxy = %q, want ''", info.Proxy)
+	}
+}

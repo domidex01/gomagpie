@@ -30,6 +30,10 @@ type CleanedPage struct {
 	FinalURL       string          `json:"final_url"`
 	Metadata       Metadata        `json:"metadata,omitempty"`
 	Quality        Issue           `json:"quality,omitempty"`
+	// HTML is the cleaned (scope-applied) document for page-format html;
+	// empty for PDFs (there is no HTML). Additive + omitempty so markdown
+	// goldens and JSON envelopes never drift.
+	HTML string `json:"html,omitempty"`
 }
 
 // Cleaner cleans one page.
@@ -79,6 +83,7 @@ func Clean(ctx context.Context, raw RawPage) (CleanedPage, error) {
 		Title:          title,
 		FinalURL:       raw.FinalURL,
 		Metadata:       meta,
+		HTML:           htmlStr,
 	}
 	// Classify against the scoped document: scoping legitimately narrows
 	// content, so the pre-scope body must not count as "richer".

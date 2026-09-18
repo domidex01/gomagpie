@@ -46,7 +46,7 @@ Zen `/responses`-only models are unsupported (different API shape).
 
 | Command | Action |
 | :-- | :-- |
-| `magpie scrape <url> [--schema f] [--render auto\|static\|browser] [--browser chrome\|firefox\|random] [--provider …] [--model …] [--format json\|jsonl] [--max-cost usd] [--out f]` | Fetch → clean → extract one URL |
+| `magpie scrape <url> [--schema f] [--render auto\|static\|browser] [--browser chrome\|firefox\|safari\|edge\|ios\|chrome_android\|random] [--page-format markdown\|llm\|text\|json\|html\|raw\|screenshot] [--viewport 1280x800] [--provider …] [--model …] [--format json\|jsonl] [--max-cost usd] [--out f]` | Fetch → clean → extract one URL |
 | `magpie extract [--schema f \| --prompt t] [--content-type html\|markdown]` | Extract from stdin/file, no fetch (prompt = plain text, no schema) |
 | `magpie batch [urls...] [--file f] [--concurrency 8] [--format jsonl\|json] [--browser …]` | Scrape ≤100 URLs, one ok/error record each (markdown only) |
 | `magpie map <site> [--format lines\|json]` | List sitemap-derived page URLs (BFS to depth 5, gzip + entity aware; partial results on dead children or a 25s budget, flagged `truncated`) |
@@ -57,9 +57,10 @@ Zen `/responses`-only models are unsupported (different API shape).
 | `magpie crawl <url> --schema f [--path-prefix /docs] [--include '**/docs/**'] [--exclude '**/api/**'] [--allow-subdomains] [--no-sitemap] [--browser …] [--exporter-cmd prog]` | BFS crawl + extract, scoped to matching links only; binary assets (pdf/images/video/fonts/archives) never enqueue; sitemap expansion is scope-filtered and best-effort; tee records as JSONL to prog's stdin |
 | `magpie serve [--transport stdio\|http] [--addr :8080]` | Serve the pipeline over MCP |
 | `magpie build --with module@version --output f` | Compile a custom static binary with extra modules |
+| `magpie search "query" [--provider brave\|serper\|serpapi\|searxng\|exa\|duckduckgo] [--limit 10] [--scrape-top 0] [--out f]` | SERP search as JSONL hits; `--scrape-top N` scrapes the first N hits through the normal pipeline (page records embedded) |
 | `magpie config set-key <provider> \| show` | Store key in OS keyring / show redacted config |
 
-Exit codes: 0 ok · 1 runtime · 2 usage (incl. non-public/SSRF-rejected URLs) · 3 all-failed · 4 partial · 5 robots-blocked · 6 cost ceiling · 7 credentials · 8 quality-blocked.
+Exit codes: 0 ok · 1 runtime · 2 usage (incl. non-public/SSRF-rejected URLs and proxy-pool config errors) · 3 all-failed · 4 partial · 5 robots-blocked · 6 cost ceiling · 7 credentials · 8 quality-blocked (incl. a bot challenge that survives the warmup retry + browser escalation — the typed error names the vendor, e.g. `fetch: bot challenge (cloudflare) on … [status 403]`).
 
 ## Network & security
 
@@ -71,10 +72,22 @@ Every fetch (static, robots, crawl) goes through one guarded transport:
   the connected peer IP (DNS-rebind safe). Rejections wrap a typed
   sentinel and exit 2. `file://` URLs are gated behind
   `GOMAGPIE_ALLOW_FILE=1`.
-- **`GOMAGPIE_PROXY=http(s)://host:port`** routes all traffic through one
-  proxy (wins over the standard `HTTP_PROXY`/`HTTPS_PROXY` env, which is
-  honored otherwise); `NO_PROXY` entries (exact or `.suffix` host match,
-  `*` = all) bypass it. Invalid values fail loudly before any request.
+- **Proxy pool — `GOMAGPIE_PROXY_FILE`** (wins over `GOMAGPIE_PROXY=http(s)://host:port`,
+  which becomes a 1-entry pool; both win over the standard
+  `HTTP_PROXY`/`HTTPS_PROXY` env, honored otherwise). One entry per line:
+  `http(s)://`, `socks5://`/`socks5h://` (Tor on loopback works), or
+  vendor-paste `host:port:user:pass`. `#` comments, blank lines skipped.
+  Strategies via `GOMAGPIE_PROXY_STRATEGY=round-robin` (default) or
+  `sticky-host`; `{{session}}` inside an entry resolves to a stable
+  8-hex token per target host (rotating-gateway sticky sessions). A dead
+  entry (dial/CONNECT failure — never an HTTP 4xx/5xx, which is a page
+  outcome) is skipped for 60 s and the fetch fails over to the next;
+  all entries dead is a loud error. `run_history.proxy` records the
+  redacted `host:port` that served — credentials never appear in any
+  error, log, or record. `--proxy-file` is a root flag sugar over the
+  env. Tor caveat: the privacy path, not an unblocking path — Tor exits
+  are widely blocked by CDNs. NO_PROXY bypasses the pool exactly like
+  the single proxy.
 - **Body cap:** 50 MB on the decoded stream, so gzip bombs are truncated,
   not downloaded.
 - **Run telemetry:** `run_history` rows accumulate `fetch_pages`,
@@ -83,13 +96,16 @@ Every fetch (static, robots, crawl) goes through one guarded transport:
 
 ## TLS impersonation & PDF
 
-**`--browser chrome|firefox|random`** (scrape, batch, crawl, MCP) swaps the
-stock TLS stack for a byte-exact browser fingerprint: Chrome/Firefox TLS
-ClientHello (JA3/JA4) *plus* matching HTTP/2 framing (SETTINGS,
-WINDOW_UPDATE, pseudo-header order) and header set. Sites that block the
-stock Go handshake pass. Notes:
+**`--browser chrome|firefox|safari|edge|ios|chrome_android|random`** (scrape,
+batch, crawl, MCP) swaps the stock TLS stack for a byte-exact browser
+fingerprint: browser TLS ClientHello (JA3/JA4) *plus* matching HTTP/2
+framing (SETTINGS, WINDOW_UPDATE, pseudo-header order) and header set.
+Sites that block the stock Go handshake pass. Notes:
 
-- `random` picks chrome or firefox once per process.
+- `random` picks uniformly among all six profiles once per process.
+- Profiles govern the static fetch + header escalation only; browser
+  rendering (`--render browser`) always launches real Chrome — a browser
+  render is not a fingerprint profile.
 - Headers come from the fingerprint profile, not `--header-profile` —
   a stale UA next to a fresh hello is itself a fingerprint tell. Set
   `--header-profile` explicitly to override; cleartext `http://` targets
@@ -109,6 +125,33 @@ scan PDF is a typed `empty` quality error (exit 8), an encrypted PDF is a
 loud error (never empty markdown). Crawl does not follow `.pdf` links.
 Credits: [`ledongthuc/pdf`](https://github.com/ledongthuc/pdf) (BSD-3,
 stdlib-only), imported only inside `clean/`.
+
+**Page formats — `--page-format html|raw|screenshot`:** `html` emits the
+cleaned, scope-applied document (PDFs: their markdown in a minimal
+`<article>` wrapper); `raw` emits the decoded response body untouched —
+the quality gate still runs, so a challenge page is a typed error, not
+raw garbage; `screenshot` captures a full-page PNG through a real browser
+(`--viewport WxH` sets the page size, `--out f.png` writes the file,
+otherwise base64 rides in `content`). The quality gate, `Clean`, and
+`Render` never change for `raw`/`screenshot` — the gate classifies
+before anything is emitted.
+
+**Search providers:** `brave` (`GOMAGPIE_BRAVE_API_KEY`), `serper`
+(`GOMAGPIE_SERPER_API_KEY`), `serpapi` (`GOMAGPIE_SERPAPI_API_KEY`), `exa`
+(`GOMAGPIE_EXA_API_KEY`) are BYOK; `searxng` needs only
+`GOMAGPIE_SEARXNG_URL` (your self-hosted instance, JSON format); `duckduckgo`
+(the default) needs nothing. Search rides the same guarded transport — SSRF
+guard and proxy pool included, with localhost/LAN endpoints allowed for the
+provider itself (it is operator-configured; `GOMAGPIE_SEARXNG_URL` on
+127.0.0.1 is the canonical setup). SERP hit URLs always scrape through the
+strict pipeline. Missing keys exit 7 with the set-key hint.
+
+**Bot challenges:** challenge-classified responses warm the cookie jar
+(homepage GET) and retry once; a vendor-verified challenge that survives
+fails as a typed `ChallengeError` naming `cloudflare`, `turnstile`,
+`datadome`, `awswaf`, or `hcaptcha` (exit 8 under `--render auto` after
+one browser-escalation attempt). Rich articles that merely mention
+"Just a moment" still clean normally — detection is size-gated.
 
 ## Checks
 

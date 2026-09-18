@@ -6,11 +6,13 @@ package scrape
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,11 +50,13 @@ type Options struct {
 	Model      string
 	MaxCost    float64
 	UseCache   bool
-	PageFormat string // markdown|llm|text|json ("" = markdown)
+	PageFormat string // markdown|llm|text|json|html|raw|screenshot ("" = markdown)
 	Scope      clean.Scope
 	Profile    string
-	Browser    string // TLS fingerprint: chrome|firefox|random ("" = stock)
+	Browser    string // TLS fingerprint: chrome|firefox|safari|edge|ios|chrome_android|random ("" = stock)
 	Cookies    string
+	// Viewport is "WxH" (e.g. 1280x800) for page-format screenshot.
+	Viewport string
 	// Vertical selects a zero-LLM typed extractor: "" (default) = off,
 	// "auto" = strict auto-dispatch, or an extractor name for explicit
 	// selection. Explicit selection with a schema ignores the schema.
@@ -75,6 +79,9 @@ type Result struct {
 	Rendered       string
 	// Vertical names the extractor that produced Record ("" when unused).
 	Vertical string `json:",omitempty"`
+	// ScreenshotPNG carries raw PNG bytes for page-format screenshot;
+	// never JSON-serialized (Rendered carries the base64 form).
+	ScreenshotPNG []byte `json:"-"`
 }
 
 // OptionsError marks a pre-I/O options validation failure (CLI exit 2).
@@ -101,12 +108,20 @@ func ValidateOptions(o Options) error {
 		return &OptionsError{fmt.Sprintf("scrape: render %q must be auto|static|browser", render)}
 	}
 	switch o.PageFormat {
-	case "", "markdown", "llm", "text", "json":
+	case "", "markdown", "llm", "text", "json", "html", "raw", "screenshot":
 	default:
-		return &OptionsError{fmt.Sprintf("scrape: page format %q must be markdown|llm|text|json", o.PageFormat)}
+		return &OptionsError{fmt.Sprintf("scrape: page format %q must be markdown|llm|text|json|html|raw|screenshot", o.PageFormat)}
+	}
+	if o.PageFormat == "screenshot" && render == "static" {
+		return &OptionsError{"scrape: page format \"screenshot\" requires browser rendering (render auto|browser, not static)"}
+	}
+	if o.Viewport != "" {
+		if w, h, err := parseViewport(o.Viewport); err != nil || w <= 0 || h <= 0 {
+			return &OptionsError{fmt.Sprintf("scrape: viewport %q must be WxH (e.g. 1280x800)", o.Viewport)}
+		}
 	}
 	if !fetch.ValidBrowser(o.Browser) {
-		return &OptionsError{fmt.Sprintf("scrape: browser %q must be chrome|firefox|random", o.Browser)}
+		return &OptionsError{fmt.Sprintf("scrape: browser %q must be %s", o.Browser, fetch.BrowserHelp)}
 	}
 	if o.Vertical != "" && o.Vertical != "auto" {
 		if _, ok := vertical.Lookup(o.Vertical); !ok {
@@ -150,6 +165,19 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		}
 	}
 
+	// Screenshot is a browser-only capability: no static fetch, no clean,
+	// no LLM. Fresh browser per capture — same pattern as fetchBrowser.
+	if o.PageFormat == "screenshot" {
+		png, serr := screenshotPage(ctx, rawURL, o.Viewport)
+		if serr != nil {
+			finish(0, 1, "error")
+			return Result{}, serr
+		}
+		finish(1, 0, "finished")
+		return Result{RunID: runID, URL: rawURL, FinalURL: rawURL,
+			Rendered: base64.StdEncoding.EncodeToString(png), ScreenshotPNG: png}, nil
+	}
+
 	var vf = d.Fetcher
 	if vf == nil {
 		static, serr := fetch.NewStaticFetcher()
@@ -167,9 +195,15 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		return Result{}, err
 	}
 	// Fetch telemetry rides the run row next to LLM usage; warn-only,
-	// never fails the page.
+	// never fails the page. The proxy entry that served (redacted
+	// host:port) lands in run_history.proxy.
 	if lerr := d.DB.LogFetch(runID, int64(len(page.HTML)), time.Since(fetchStart).Milliseconds()); lerr != nil {
 		fmt.Fprintf(os.Stderr, "warning: log fetch: %v\n", lerr)
+	}
+	if page.Proxy != "" {
+		if perr := d.DB.SetRunProxy(runID, page.Proxy); perr != nil {
+			fmt.Fprintf(os.Stderr, "warning: record proxy: %v\n", perr)
+		}
 	}
 
 	cleaned, err := clean.Clean(ctx, clean.RawPage{
@@ -187,12 +221,18 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	}
 	base := Result{RunID: runID, URL: page.URL, FinalURL: cleaned.FinalURL, Title: cleaned.Title,
 		Markdown: cleaned.Markdown, StructuredData: cleaned.StructuredData}
-	rendered, rerr := clean.Render(cleaned, o.PageFormat)
-	if rerr != nil {
-		finish(0, 1, "error")
-		return Result{}, rerr
+	if o.PageFormat == "raw" {
+		// The decoded response body, untouched (quality gate above still
+		// classified it — challenge raw is a typed error, never bytes).
+		base.Rendered = string(page.HTML)
+	} else {
+		rendered, rerr := clean.Render(cleaned, o.PageFormat)
+		if rerr != nil {
+			finish(0, 1, "error")
+			return Result{}, rerr
+		}
+		base.Rendered = rendered
 	}
-	base.Rendered = rendered
 
 	if explicit != nil {
 		// ^ --list ships in Phase C; the message names it anyway so the string never changes.
@@ -293,6 +333,18 @@ func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render, profile,
 	// get typed quality errors instead of "fetch: HTTP %d".
 	resp, err := vf.Fetch(ctx, fetch.FetchRequest{URL: rawURL, Profile: profile, Cookies: cookies, Browser: browser})
 	if err != nil {
+		// G.2: a typed challenge gets exactly one rod escalation attempt
+		// under render=auto (a real browser often clears it); static
+		// callers asked for no browser and get the typed error directly.
+		var ce *fetch.ChallengeError
+		if render != "static" && errors.As(err, &ce) {
+			bresp, berr := fetchBrowser(ctx, rawURL)
+			if berr == nil && fetch.DetectChallenge(bresp.HTML, bresp.Headers, bresp.StatusCode) == "" {
+				return bresp, nil
+			}
+			// Typed error stays primary — launch noise must never mask the vendor.
+			return nil, ce
+		}
 		return nil, err
 	}
 	if render == "static" {
@@ -303,6 +355,32 @@ func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render, profile,
 		return resp, nil
 	}
 	return fetchBrowser(ctx, rawURL)
+}
+
+// parseViewport parses the WxH screenshot viewport shape (0,0 = default).
+func parseViewport(v string) (int, int, error) {
+	if v == "" {
+		return 0, 0, nil
+	}
+	w, h, ok := strings.Cut(v, "x")
+	if !ok {
+		return 0, 0, fmt.Errorf("want WxH")
+	}
+	pw, err1 := strconv.Atoi(w)
+	ph, err2 := strconv.Atoi(h)
+	if err1 != nil || err2 != nil {
+		return 0, 0, fmt.Errorf("want WxH")
+	}
+	return pw, ph, nil
+}
+
+// screenshotPage captures a full-page PNG through a fresh browser.
+func screenshotPage(ctx context.Context, rawURL, viewport string) ([]byte, error) {
+	w, h, err := parseViewport(viewport)
+	if err != nil {
+		return nil, &OptionsError{fmt.Sprintf("scrape: viewport %q must be WxH (e.g. 1280x800)", viewport)}
+	}
+	return fetch.ScreenshotPage(ctx, rawURL, w, h)
 }
 
 func fetchBrowser(ctx context.Context, rawURL string) (*fetch.FetchResponse, error) {

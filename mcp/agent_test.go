@@ -163,7 +163,7 @@ func TestToolCatalog(t *testing.T) {
 		got = append(got, tl.Name)
 	}
 	want := []string{"scrape_url", "crawl_site", "extract_structured", "get_cached_selectors",
-		"batch", "map", "summarize", "diff", "brand", "list_extractors", "vertical_scrape"}
+		"batch", "map", "summarize", "diff", "brand", "list_extractors", "vertical_scrape", "search"}
 	if len(got) != len(want) {
 		t.Fatalf("tool count = %d (%v), want %d", len(got), got, len(want))
 	}
@@ -838,5 +838,100 @@ func TestCrawlSite_UsageHasFetchCounters(t *testing.T) {
 		if _, ok := usage2[k].(float64); !ok {
 			t.Errorf("status usage[%q] missing or not a number: %v", k, usage2[k])
 		}
+	}
+}
+
+// --- Phase G G.5: the search tool. ---
+
+// TestMCP_SearchMissingKey: agentDeps resolves keys via APIKeyFor; a
+// nil-key variant surfaces the typed missing-key error text (exit 7 at
+// the CLI edge).
+func TestMCP_SearchMissingKey(t *testing.T) {
+	db := openMCPDB(t)
+	deps := agentDeps(db, &fakeExtractor{}, nil, &fakeAgentFetcher{})
+	deps.ScrapeDeps.APIKeyFor = func(string) string { return "" }
+	cs := dialInMemory(t, magpiemcp.NewServer(deps), nil)
+	res := callTool(t, cs, "search", map[string]any{"query": "q", "provider": "brave"}, "")
+	if !res.IsError {
+		t.Fatal("want tool error")
+	}
+	raw, err := json.Marshal(res.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"missing API key", "brave"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("content %s missing %q", raw, want)
+		}
+	}
+}
+
+// TestMCP_SearchUnknownProvider: the error names the valid set.
+func TestMCP_SearchUnknownProvider(t *testing.T) {
+	db := openMCPDB(t)
+	cs := dialInMemory(t, magpiemcp.NewServer(agentDeps(db, &fakeExtractor{}, nil, &fakeAgentFetcher{})), nil)
+	res := callTool(t, cs, "search", map[string]any{"query": "q", "provider": "altavista"}, "")
+	if !res.IsError {
+		t.Fatal("want tool error")
+	}
+	raw, err := json.Marshal(res.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"altavista", "brave", "serper", "serpapi", "searxng", "exa", "duckduckgo"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("content %s missing %q", raw, want)
+		}
+	}
+}
+
+// TestMCP_PageFormatUnion: the format error message names the new
+// values (the MCP boundary sees scrape's exact validation string).
+func TestMCP_PageFormatUnion(t *testing.T) {
+	db := openMCPDB(t)
+	cs := dialInMemory(t, magpiemcp.NewServer(agentDeps(db, &fakeExtractor{}, nil, &fakeAgentFetcher{})), nil)
+	res := callTool(t, cs, "scrape_url", map[string]any{"url": "https://example.com", "page_format": "xml", "render": "static"}, "")
+	if !res.IsError {
+		t.Fatal("want tool error")
+	}
+	raw, err := json.Marshal(res.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"html", "raw", "screenshot"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("content %s missing %q", raw, want)
+		}
+	}
+}
+
+// TestMCP_SearchZeroKeyProviderSmoke: searxng needs no key; the call
+// proceeds to the (dead local) endpoint and fails on the DIAL, not on
+// key or provider validation — proving zero-key providers pass the
+// pre-flight without any network. (Happy paths live in scrape's
+// fixture tests; the default suite stays hermetic.)
+func TestMCP_SearchZeroKeyProviderSmoke(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	url := dead.URL
+	dead.Close() // closed port: connection refused, zero external dials
+	t.Setenv("GOMAGPIE_SEARXNG_URL", url)
+	db := openMCPDB(t)
+	deps := agentDeps(db, &fakeExtractor{}, nil, &fakeAgentFetcher{})
+	deps.ScrapeDeps.APIKeyFor = func(string) string { return "" }
+	cs := dialInMemory(t, magpiemcp.NewServer(deps), nil)
+	res := callTool(t, cs, "search", map[string]any{"query": "q", "provider": "searxng", "limit": json.Number("2")}, "")
+	if !res.IsError {
+		t.Fatal("dead endpoint must error")
+	}
+	raw, err := json.Marshal(res.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if strings.Contains(s, "missing API key") || strings.Contains(s, "unknown") {
+		t.Fatalf("zero-key provider rejected pre-flight: %s", s)
+	}
+	if !strings.Contains(s, "refused") && !strings.Contains(s, "connect") {
+		t.Errorf("error %s should be a dial failure", s)
 	}
 }

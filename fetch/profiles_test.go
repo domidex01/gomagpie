@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	impersonate "github.com/North-web-dev/impersonate-http"
+
 	"gomagpie/fetch"
 )
 
@@ -80,7 +82,9 @@ func TestProfiles_Default(t *testing.T) {
 
 func TestProfiles_UnknownFallsBack(t *testing.T) {
 	srv := echoOrigin(t)
-	body := fetchBody(t, srv.URL, fetch.FetchRequest{Profile: "safari"})
+	// "webkit" is not a profile (safari became one in Phase G) — unknown
+	// names must keep falling back to the default bundle.
+	body := fetchBody(t, srv.URL, fetch.FetchRequest{Profile: "webkit"})
 	if !strings.Contains(body, "magpie/1.0") {
 		t.Errorf("unknown profile UA = %q, want default magpie", body)
 	}
@@ -176,23 +180,84 @@ func TestChallenge_NoRetryWhenClean(t *testing.T) {
 	}
 }
 
+// TestChallenge_NoProfileNoRetry is SPLIT (Phase G G.2 gate widening):
+// a bare request on a vendor-signature challenge now warms up + retries
+// (new contract), while a status-only challenge (no vendor signature)
+// keeps the old passthrough — and clean pages never warm up.
 func TestChallenge_NoProfileNoRetry(t *testing.T) {
+	// Vendor-signed challenge body: the NEW contract fires warmup+retry.
 	var h challengeHits
-	url := newChallengeOrigin(t, &h, "<html><head><title>Just a moment</title></head><body>verifying</body></html>")
+	cf := newChallengeOrigin(t, &h, "<html><head><title>Just a moment</title></head><body><script>window._cf_chl_opt={chlRay:'x'}</script><p>verifying</p></body></html>")
 	f, err := fetch.NewStaticFetcher()
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: url})
+	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: cf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(resp.HTML), "Real page") {
+		t.Errorf("retry body = %q, want real page", resp.HTML)
+	}
+	h.mu.Lock()
+	if h.challenge != 2 || h.homepage != 1 {
+		t.Errorf("hits challenge=%d homepage=%d, want 2/1 (bare + typed challenge now warms up)", h.challenge, h.homepage)
+	}
+	h.mu.Unlock()
+
+	// Status-only challenge (403 + thin markers, no vendor signature):
+	// old contract — passthrough, no warmup, no retry.
+	var h2 challengeHits
+	statusOnly := newChallengeOrigin(t, &h2, "<html><head><title>Just a moment</title></head><body>verifying</body></html>")
+	resp, err = f.Fetch(t.Context(), fetch.FetchRequest{URL: statusOnly})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.StatusCode != 403 {
-		t.Errorf("status = %d, want 403 passthrough without profile", resp.StatusCode)
+		t.Errorf("status = %d, want 403 passthrough (untyped challenge, bare request)", resp.StatusCode)
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.challenge != 1 || h.homepage != 0 {
-		t.Errorf("hits challenge=%d homepage=%d, want 1/0", h.challenge, h.homepage)
+	h2.mu.Lock()
+	if h2.challenge != 1 || h2.homepage != 0 {
+		t.Errorf("hits challenge=%d homepage=%d, want 1/0 (no warmup without a vendor signature)", h2.challenge, h2.homepage)
+	}
+	h2.mu.Unlock()
+
+	// The retry request carries the same Profile/Browser/Cookies as the
+	// original (cookie warmup only helps if the retry matches).
+	var h3 challengeHits
+	cookieOrigin := newChallengeOrigin(t, &h3, "<html><body><script>_cf_chl_opt=1</script>blocked</body></html>")
+	if _, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: cookieOrigin, Profile: "chrome", Cookies: "a=b"}); err != nil {
+		t.Fatal(err)
+	}
+	h3.mu.Lock()
+	defer h3.mu.Unlock()
+	// The retry must carry the raw Cookies AND the warmed jar session
+	// (the jar is host-scoped, and 127.0.0.1 is port-agnostic per
+	// RFC 6265, so earlier warmups on other local origins may already
+	// appear on attempt 1 — the contract is about the retry's contents).
+	if len(h3.cookies) < 2 {
+		t.Fatalf("requests = %d, want challenge + retry", len(h3.cookies))
+	}
+	for _, want := range []string{"a=b", "session=warmed"} {
+		if !strings.Contains(h3.cookies[len(h3.cookies)-1], want) {
+			t.Errorf("retry cookies = %q, want %q present", h3.cookies[len(h3.cookies)-1], want)
+		}
+	}
+}
+
+// TestHeaderProfiles_MatchLibrary (Phase G G.3): the header bundles for
+// the four new profiles must carry the library's exact User-Agent —
+// drift in either direction is what DataDome-class WAFs score.
+func TestHeaderProfiles_MatchLibrary(t *testing.T) {
+	for _, name := range []string{"safari", "edge", "ios", "chrome_android"} {
+		want := impersonate.Profiles[name].Headers.Get("User-Agent")
+		got := fetch.HeaderProfiles[name]["User-Agent"]
+		if got == "" {
+			t.Errorf("HeaderProfiles[%q] missing User-Agent", name)
+			continue
+		}
+		if got != want {
+			t.Errorf("HeaderProfiles[%q] UA = %q, want the library profile's %q", name, got, want)
+		}
 	}
 }

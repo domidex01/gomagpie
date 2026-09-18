@@ -6,10 +6,13 @@ package fetch_test
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +20,27 @@ import (
 	"gomagpie/crawl"
 	"gomagpie/fetch"
 )
+
+// newClosedPort returns a 127.0.0.1 host:port that reliably refuses
+// connections (bound then released) — the deterministic dead entry.
+func newClosedPort(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+// proxyURLhost strips the scheme: pool lines want "http://host:port"
+// built from an httptest URL, redaction comparisons want host:port.
+func proxyURLhost(proxyURL string) string {
+	return strings.TrimPrefix(proxyURL, "http://")
+}
 
 // newProxyOrigin is a stdlib reverse proxy with a hit counter — the
 // test-only egress stand-in (no proxy stub to maintain).
@@ -156,5 +180,119 @@ func TestProxy_DialGuardSkipsProxyPeer(t *testing.T) {
 	}
 	if n := originHits.Load(); n != 0 {
 		t.Errorf("origin hits = %d, want 0 (target still rejected pre-dial)", n)
+	}
+}
+
+// --- Phase G pool extensions: failover, 4xx-not-egress, NO_PROXY×pool,
+// run_history surfacing. The five tests above run unmodified. ---
+
+// TestProxy_PoolFailover: entry1 is a closed port (connection refused ⇒
+// egress error), entry2 is the reverse-proxy stand-in. The fetch must
+// transparently serve via entry2 and surface the REDACTED endpoint
+// (credentials from a sibling entry must never appear).
+func TestProxy_PoolFailover(t *testing.T) {
+	var originHits, proxyHits atomic.Int64
+	origin := hitOrigin(t, &originHits, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("via pool")) //nolint:errcheck // test server
+	})
+	proxyURL := newProxyOrigin(t, &proxyHits, origin.URL)
+	closed := newClosedPort(t)
+	poolFile := filepath.Join(t.TempDir(), "pool.txt")
+	content := "http://cust:hunter2password@" + closed + "\nhttp://" + proxyURLhost(proxyURL) + "\n"
+	if err := os.WriteFile(poolFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOMAGPIE_PROXY", "")
+	t.Setenv("GOMAGPIE_PROXY_FILE", poolFile)
+	t.Setenv("GOMAGPIE_PROXY_STRATEGY", "")
+	t.Setenv("NO_PROXY", "")
+
+	f := relaxedFetcher(t)
+	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: origin.URL + "/x"})
+	if err != nil {
+		t.Fatalf("failover fetch: %v", err)
+	}
+	if string(resp.HTML) != "via pool" {
+		t.Errorf("body = %q, want via pool", resp.HTML)
+	}
+	if n := proxyHits.Load(); n != 1 {
+		t.Errorf("entry2 proxy hits = %d, want 1", n)
+	}
+	if strings.Contains(resp.Proxy, "hunter2password") || strings.Contains(resp.Proxy, "cust@") {
+		t.Errorf("resp.Proxy = %q, credentials leaked", resp.Proxy)
+	}
+	if resp.Proxy != proxyURLhost(proxyURL) {
+		t.Errorf("resp.Proxy = %q, want the serving entry redacted to %s", resp.Proxy, proxyURLhost(proxyURL))
+	}
+}
+
+// TestProxy_Pool4xxNotEgress: an HTTP 500 through entry1 is a PAGE
+// outcome — the pool must NOT rotate (entry2 stays untouched, the 500
+// body is returned). Failover on statuses would mask site errors as
+// proxy churn.
+func TestProxy_Pool4xxNotEgress(t *testing.T) {
+	var badOriginHits, badProxyHits, goodProxyHits atomic.Int64
+	badOrigin := hitOrigin(t, &badOriginHits, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "site exploded", http.StatusInternalServerError)
+	})
+	badProxy := newProxyOrigin(t, &badProxyHits, badOrigin.URL)
+	var goodOriginHits atomic.Int64
+	goodOrigin := hitOrigin(t, &goodOriginHits, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("never")) //nolint:errcheck // test server
+	})
+	goodProxy := newProxyOrigin(t, &goodProxyHits, goodOrigin.URL)
+	poolFile := filepath.Join(t.TempDir(), "pool.txt")
+	content := "http://" + proxyURLhost(badProxy) + "\nhttp://" + proxyURLhost(goodProxy) + "\n"
+	if err := os.WriteFile(poolFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOMAGPIE_PROXY", "")
+	t.Setenv("GOMAGPIE_PROXY_FILE", poolFile)
+	t.Setenv("GOMAGPIE_PROXY_STRATEGY", "")
+	t.Setenv("NO_PROXY", "")
+
+	f := relaxedFetcher(t)
+	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: badOrigin.URL + "/x"})
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 passthrough", resp.StatusCode)
+	}
+	if n := badProxyHits.Load(); n != 1 {
+		t.Errorf("bad proxy hits = %d, want exactly 1", n)
+	}
+	if n := goodProxyHits.Load(); n != 0 {
+		t.Errorf("good proxy hits = %d, want 0 (5xx is a page outcome, never egress)", n)
+	}
+}
+
+// TestProxy_PoolNoProxyBypass: NO_PROXY naming the target host must
+// bypass the pool entirely (direct dial, peer check applies).
+func TestProxy_PoolNoProxyBypass(t *testing.T) {
+	var originHits, proxyHits atomic.Int64
+	origin := hitOrigin(t, &originHits, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("direct")) //nolint:errcheck // test server
+	})
+	proxyURL := newProxyOrigin(t, &proxyHits, origin.URL)
+	poolFile := filepath.Join(t.TempDir(), "pool.txt")
+	if err := os.WriteFile(poolFile, []byte("http://"+proxyURLhost(proxyURL)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOMAGPIE_PROXY", "")
+	t.Setenv("GOMAGPIE_PROXY_FILE", poolFile)
+	t.Setenv("GOMAGPIE_PROXY_STRATEGY", "")
+	t.Setenv("NO_PROXY", "127.0.0.1")
+
+	f := relaxedFetcher(t)
+	resp, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: origin.URL + "/x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(resp.HTML) != "direct" {
+		t.Errorf("body = %q, want direct", resp.HTML)
+	}
+	if n := proxyHits.Load(); n != 0 {
+		t.Errorf("proxy hits = %d, want 0 (NO_PROXY bypasses the pool)", n)
 	}
 }

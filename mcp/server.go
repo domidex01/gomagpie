@@ -23,7 +23,7 @@ type Deps struct {
 	MaxCost         float64
 }
 
-// NewServer registers the eleven tools on a fresh server. Every tool goes
+// NewServer registers the twelve tools on a fresh server. Every tool goes
 // through widenedTool (schema inferred from In exactly as before, then
 // widened for stringy clients) — never bare sdk.Tool literals, so a new
 // tool cannot silently miss coercion.
@@ -40,5 +40,6 @@ func NewServer(d Deps) *sdk.Server {
 	sdk.AddTool(server, widenedTool[BrandIn]("brand", "Extract brand colors, fonts, logo and favicon (zero LLM)"), handleBrand(d))
 	sdk.AddTool(server, widenedTool[ListExtractorsIn]("list_extractors", "List zero-LLM vertical extractors"), handleListExtractors(d))
 	sdk.AddTool(server, widenedTool[VerticalScrapeIn]("vertical_scrape", "Extract one URL with a named vertical extractor (zero LLM)"), handleVertical(d))
+	sdk.AddTool(server, widenedTool[SearchIn]("search", "Search the web via BYOK/no-key SERP providers, optionally scrape the top hits"), handleSearch(d))
 	return server
 }

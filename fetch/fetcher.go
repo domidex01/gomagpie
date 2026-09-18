@@ -22,6 +22,9 @@ type FetchResponse struct {
 	StatusCode int
 	HTML       []byte
 	Headers    http.Header
+	// Proxy is the redacted host:port of the proxy entry that served
+	// this response (pool or GOMAGPIE_PROXY); "" when direct.
+	Proxy string
 }
 
 // Fetcher fetches one URL. Rod lives behind this interface.

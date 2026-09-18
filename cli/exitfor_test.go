@@ -57,3 +57,31 @@ func TestScrape_BadRenderExit2(t *testing.T) {
 		t.Errorf("error = %v, want scrape's exact validation string", err)
 	}
 }
+
+// Phase G: search missing keys ride the same ErrMissingKey → 7 mapping.
+func TestExitCode_SearchMissingKey(t *testing.T) {
+	err := fmt.Errorf("scrape: search provider brave: %w", scrape.ErrMissingKey)
+	if got := exitCode(err); got != 7 {
+		t.Errorf("exitCode(search missing key) = %d, want 7", got)
+	}
+	err = fmt.Errorf("mcp: search: scrape: search provider serper: %w", scrape.ErrMissingKey)
+	if got := exitCode(err); got != 7 {
+		t.Errorf("exitCode(mcp search missing key) = %d, want 7", got)
+	}
+}
+
+// Phase G: a surviving typed challenge is a page-usability failure (8).
+func TestExitCode_Challenge(t *testing.T) {
+	err := &fetch.ChallengeError{Vendor: "cloudflare", StatusCode: 403, URL: "https://x"}
+	if got := exitCode(fmt.Errorf("scrape: %w", err)); got != 8 {
+		t.Errorf("exitCode(challenge) = %d, want 8", got)
+	}
+}
+
+// Phase G: proxy pool misconfiguration is a usage error (2).
+func TestExitCode_ProxyConfig(t *testing.T) {
+	err := fmt.Errorf("fetch: proxy pool line 3: %w", fetch.ErrProxyConfig)
+	if got := exitCode(err); got != 2 {
+		t.Errorf("exitCode(proxy config) = %d, want 2", got)
+	}
+}

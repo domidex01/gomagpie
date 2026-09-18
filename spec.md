@@ -663,6 +663,56 @@ magpie build --with github.com/acme/gomagpie-proxy@v1.2.0 --output magpie-custom
 magpie cache inspect --domain amazon.fr
 ```
 
+### 10.4 Egress & challenges (Phase G delta)
+
+- **Proxy pool:** `GOMAGPIE_PROXY_FILE` (multi-entry; wins over
+  `GOMAGPIE_PROXY`, which is a 1-entry pool; both win over the standard
+  env proxies). Line forms: `http(s)://`, `socks5(h)://`, or vendor-paste
+  `host:port:user:pass`. `#` comments. Strategies:
+  `GOMAGPIE_PROXY_STRATEGY=round-robin|sticky-host`; `{{session}}` in an
+  entry → per-target-host stable 8-hex token. Dial/CONNECT failures put
+  an entry on a 60 s cooldown and the fetch fails over (≤ min(3, |pool|)
+  attempts); HTTP statuses are page outcomes, never egress failures.
+  All-dead → loud error listing redacted `host:port` endpoints only.
+  `run_history.proxy` records the redacted serving entry; credentials
+  never surface in errors/logs/records. `--proxy-file` is flag sugar
+  over the env. NO_PROXY bypasses the pool (the SSRF peer check then
+  applies — safe default); operator-chosen egress (any pool/proxy entry)
+  skips the peer check for the proxy dial, exactly as `GOMAGPIE_PROXY`
+  always has. Tor (`socks5://127.0.0.1:9050`) is the canonical loopback
+  proxy: trusted egress, publicly-dialed targets.
+- **Typed challenges:** `fetch.ChallengeError{Vendor, StatusCode, URL}`
+  with `fetch.DetectChallenge(body, headers, status)` — `cf-mitigated`
+  header authoritative; body signatures (cloudflare, turnstile,
+  datadome, awswaf, hcaptcha) size-gated by the same thin-page rule as
+  `clean.IsChallengePage`. Static fetch warms up + retries once on any
+  challenge (typed or fingerprint-flagged); a surviving typed challenge
+  is `ChallengeError` (exit 8, grouped with quality). `render=auto` gets
+  one rod escalation before failing with the typed error.
+  `clean.Classify` remains the final backstop for untyped challenges.
+- **Page formats:** `--page-format` = `markdown|llm|text|json|html|raw|screenshot`.
+  `html` = the scope-applied cleaned document (PDFs: markdown in an
+  `<article>` wrapper); `raw` = decoded response body verbatim (quality
+  gate still classifies); `screenshot` = full-page PNG via rod
+  (`--viewport WxH`; `--out` writes bytes, else base64 in `content`;
+  `render=static` is an options error). `CleanedPage.HTML` is additive
+  `omitempty` — markdown goldens never drift.
+- **TLS breadth:** `--browser` accepts the impersonate-http profile set
+  (`chrome|firefox|safari|edge|ios|chrome_android|random`); header
+  profiles mirror the library bundles so cleartext fallback matches the
+  fingerprint.
+- **Search:** `magpie search` (MCP tool `search`) over a data registry of
+  six backends — brave, serper, serpapi, exa (BYOK via the generic key
+  derivation), searxng (`GOMAGPIE_SEARXNG_URL`, zero-key), duckduckgo
+  (zero-key default). JSONL records `{position,title,url,snippet[,page]}`;
+  `--scrape-top N` runs the first N hit URLs through `scrape.Batch`.
+  Missing keys exit 7; unknown providers exit 2. The client rides the
+  guarded transport with an explicit `AllowPrivate` opt-in — every peer
+  of the search client is operator-configured (fixed provider endpoints
+  or `GOMAGPIE_SEARXNG_URL`; a localhost searxng is the canonical
+  zero-key deployment), while SERP hit URLs scrape through the strict
+  pipeline.
+
 ---
 
 ## 11. POLITENESS & SAFETY DEFAULTS

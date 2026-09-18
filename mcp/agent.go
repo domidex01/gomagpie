@@ -25,7 +25,7 @@ type BatchIn struct {
 	URLs            StringList `json:"urls" jsonschema:"up to 100 absolute http(s) or file URLs to scrape"`
 	Concurrency     FlexInt    `json:"concurrency,omitempty" jsonschema:"max parallel scrapes (default 8)"`
 	Render          string     `json:"render,omitempty" jsonschema:"auto, static, or browser"`
-	Profile         string     `json:"profile,omitempty" jsonschema:"header profile: default, chrome, or firefox"`
+	Profile         string     `json:"profile,omitempty" jsonschema:"header profile: default, chrome, firefox, safari, edge, ios, or chrome_android"`
 	Cookies         string     `json:"cookies,omitempty" jsonschema:"raw Cookie header value"`
 	Include         StringList `json:"include,omitempty" jsonschema:"CSS selectors: scrape only matching subtrees"`
 	Exclude         StringList `json:"exclude,omitempty" jsonschema:"CSS selectors: drop matching nodes"`
@@ -313,4 +313,37 @@ func extractPrompt(ctx context.Context, d Deps, in ExtractIn) (*sdk.CallToolResu
 		"completion_tokens": pr.Usage.CompletionTokens,
 		"usd_estimate":      pr.Usage.USDEstimate,
 	}}, nil
+}
+
+// --- search ---
+
+// SearchIn is the search input: a SERP query via a BYOK/no-key backend,
+// optionally scraping the top hits through the normal pipeline.
+type SearchIn struct {
+	Query     string  `json:"query" jsonschema:"search query"`
+	Provider  string  `json:"provider,omitempty" jsonschema:"brave, serper, serpapi, searxng, exa, or duckduckgo (default duckduckgo — zero-key)"`
+	Limit     FlexInt `json:"limit,omitempty" jsonschema:"max hits (default 10)"`
+	ScrapeTop FlexInt `json:"scrape_top,omitempty" jsonschema:"scrape the first N hits through the normal pipeline"`
+}
+
+// SearchOut is the search output: hits in position order, each with an
+// optional page record when scrape_top reached it.
+type SearchOut struct {
+	Query string                `json:"query" jsonschema:"the query"`
+	Hits  []scrape.SearchRecord `json:"hits" jsonschema:"hits in position order; page carries the scraped record when scrape_top ran"`
+}
+
+func handleSearch(d Deps) func(context.Context, *sdk.CallToolRequest, SearchIn) (*sdk.CallToolResult, SearchOut, error) {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in SearchIn) (*sdk.CallToolResult, SearchOut, error) {
+		records, err := scrape.Search(ctx, d.ScrapeDeps, in.Query, scrape.SearchOptions{
+			Provider: in.Provider, Limit: int(in.Limit), ScrapeTop: int(in.ScrapeTop),
+		})
+		if err != nil {
+			return nil, SearchOut{}, fmt.Errorf("mcp: search: %w", err)
+		}
+		if records == nil {
+			records = []scrape.SearchRecord{}
+		}
+		return nil, SearchOut{Query: in.Query, Hits: records}, nil
+	}
 }
