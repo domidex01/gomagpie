@@ -176,7 +176,7 @@ func redditChainJSON(t *testing.T, depth int) []byte {
 			"kind": "t1",
 			"data": map[string]any{
 				"author": fmt.Sprintf("u%d", i), "score": i, "body": "chain", "created_utc": float64(i),
-				"replies": map[string]any{"kind": "Listing", "data": map[string]any{"children": deepCopyKids(node)}},
+				"replies": map[string]any{"kind": "Listing", "data": map[string]any{"children": wrapKids(node)}},
 			},
 		}
 	}
@@ -195,7 +195,7 @@ func redditChainJSON(t *testing.T, depth int) []byte {
 	return raw
 }
 
-func deepCopyKids(node map[string]any) []any {
+func wrapKids(node map[string]any) []any {
 	if node == nil {
 		return []any{}
 	}

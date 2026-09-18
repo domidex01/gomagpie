@@ -157,12 +157,6 @@ func redditThreadFromJSON(body []byte, url string) (map[string]any, error) {
 	}, nil
 }
 
-// anyMap type-asserts a decoded JSON value to an object (nil when not).
-func anyMap(v any) map[string]any {
-	m, _ := v.(map[string]any)
-	return m
-}
-
 // Comment-tree caps. ponytail: depth 10 / total 200; deeper needs the
 // `more`-object API pagination as the upgrade path.
 const (

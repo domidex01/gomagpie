@@ -179,6 +179,12 @@ func firstJSONArray(body []byte) (map[string]any, error) {
 	return m, nil
 }
 
+// anyMap type-asserts a decoded JSON value to an object (nil when not).
+func anyMap(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}
+
 // hostIs folds the URL host for canonical-host checks.
 func hostIs(u *url.URL, hosts ...string) bool {
 	h := strings.ToLower(u.Hostname())

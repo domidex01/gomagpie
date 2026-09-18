@@ -105,6 +105,17 @@ func ParseActions(lines []string) ([]Action, error) {
 	return out, nil
 }
 
+// sleepCtx waits d or fails with the ctx error — the one ctx-bounded
+// pause helper (fetch settle, action settle, and the wait verb share it).
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
 // FetchWithActions navigates, waits for load, runs the action lines in
 // order, settles, and returns the final HTML. Fetch is this with nil
 // actions — one code path, so non-action browser behavior cannot drift.
@@ -127,11 +138,9 @@ func (r *RodFetcher) FetchWithActions(ctx context.Context, req FetchRequest, act
 		return nil, err
 	}
 	// ponytail: fixed 2s settle, no network-idle heuristic; ceiling = slow hydration, tunable later.
-	select {
-	case <-cctx.Done():
+	if err := sleepCtx(cctx, 2*time.Second); err != nil {
 		_ = page.Close() //nolint:errcheck // error path; teardown failure unactionable
-		return nil, fmt.Errorf("fetch: settle: %w", cctx.Err())
-	case <-time.After(2 * time.Second):
+		return nil, fmt.Errorf("fetch: settle: %w", err)
 	}
 	html, err := page.HTML()
 	if err != nil {
@@ -181,10 +190,8 @@ func runActions(ctx context.Context, page *rod.Page, acts []Action) error {
 		}
 		switch a.Verb {
 		case "click", "type", "scroll":
-			select {
-			case <-ctx.Done():
-				return fmt.Errorf("fetch: action %d (%s): %w", i+1, a.Verb, ctx.Err())
-			case <-time.After(actionSettle):
+			if err := sleepCtx(ctx, actionSettle); err != nil {
+				return fmt.Errorf("fetch: action %d (%s): %w", i+1, a.Verb, err)
 			}
 		}
 	}
@@ -223,12 +230,7 @@ func runAction(ctx context.Context, page *rod.Page, a Action) error {
 			return err
 		}
 	case "wait":
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Duration(a.Ms) * time.Millisecond):
-			return nil
-		}
+		return sleepCtx(ctx, time.Duration(a.Ms)*time.Millisecond)
 	case "wait-for":
 		_, err := page.Element(a.Sel) // auto-waits under the ctx budget
 		return err
@@ -271,10 +273,8 @@ func (r *RodFetcher) screenshot(ctx context.Context, rawURL string, width, heigh
 		return nil, err
 	}
 	// Same fixed settle as Fetch — one policy, no divergence.
-	select {
-	case <-cctx.Done():
-		return nil, fmt.Errorf("fetch: settle: %w", cctx.Err())
-	case <-time.After(2 * time.Second):
+	if err := sleepCtx(cctx, 2*time.Second); err != nil {
+		return nil, fmt.Errorf("fetch: settle: %w", err)
 	}
 	png, err := page.Screenshot(true, nil) // full-page, defaults
 	if err != nil {

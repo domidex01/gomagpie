@@ -213,7 +213,7 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	}
 	fetchStart := time.Now()
 	render := defaultRender(o.Render) // same default ValidateOptions validated
-	page, err := fetchURL(ctx, vf, rawURL, render, o.Profile, o.Cookies, o.Browser, o.Lang, o.Actions)
+	page, err := fetchURL(ctx, vf, rawURL, render, o)
 	if err != nil {
 		finish(0, 1, "error")
 		return Result{}, err
@@ -349,22 +349,22 @@ func runVertical(ctx context.Context, vf vertical.Fetcher, rawURL string, ex ver
 	return base, nil
 }
 
-func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render, profile, cookies, browser, lang string, actions []string) (*fetch.FetchResponse, error) {
+func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render string, o Options) (*fetch.FetchResponse, error) {
 	// Actions force the browser path: their whole point is DOM interaction
 	// a static fetch cannot honor (ValidateOptions rejected static).
-	if render == "browser" || len(actions) > 0 {
-		return fetchBrowser(ctx, rawURL, lang, actions)
+	if render == "browser" || len(o.Actions) > 0 {
+		return fetchBrowser(ctx, rawURL, o.Lang, o.Actions)
 	}
 	// A4 pass-through: every status reaches Clean+Classify so blocked pages
 	// get typed quality errors instead of "fetch: HTTP %d".
-	resp, err := vf.Fetch(ctx, fetch.FetchRequest{URL: rawURL, Profile: profile, Cookies: cookies, Browser: browser, Lang: lang})
+	resp, err := vf.Fetch(ctx, fetch.FetchRequest{URL: rawURL, Profile: o.Profile, Cookies: o.Cookies, Browser: o.Browser, Lang: o.Lang})
 	if err != nil {
 		// G.2: a typed challenge gets exactly one rod escalation attempt
 		// under render=auto (a real browser often clears it); static
 		// callers asked for no browser and get the typed error directly.
 		var ce *fetch.ChallengeError
 		if render != "static" && errors.As(err, &ce) {
-			bresp, berr := fetchBrowser(ctx, rawURL, lang, actions)
+			bresp, berr := fetchBrowser(ctx, rawURL, o.Lang, o.Actions)
 			if berr == nil && fetch.DetectChallenge(bresp.HTML, bresp.Headers, bresp.StatusCode) == "" {
 				return bresp, nil
 			}
@@ -380,7 +380,7 @@ func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render, profile,
 	if embedded || !fetch.NeedsBrowser(score) {
 		return resp, nil
 	}
-	return fetchBrowser(ctx, rawURL, lang, actions)
+	return fetchBrowser(ctx, rawURL, o.Lang, o.Actions)
 }
 
 // parseViewport parses the WxH screenshot viewport shape (0,0 = default).

@@ -454,7 +454,7 @@ func (c *crawlContext) fetchPage(ctx context.Context, task core.FetchTask) (core
 			defer c.gate.Release()
 			rod := fetch.NewRodFetcher()
 			defer func() { _ = rod.Close() }() //nolint:errcheck // teardown unactionable
-			return rod.Fetch(ctx, fetch.FetchRequest{URL: task.URL})
+			return rod.Fetch(ctx, fetch.FetchRequest{URL: task.URL, Lang: c.opts.Lang})
 		}()
 		if berr != nil {
 			return core.FetchedPage{Task: task, Err: berr}, nil
