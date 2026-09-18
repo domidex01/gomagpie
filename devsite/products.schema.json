@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "properties": {
+    "products": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name":  { "type": "string", "selector": ".product .name" },
+          "price": { "type": "string", "selector": ".product .price" },
+          "sku":   { "type": "string", "selector": ".product", "attr": "data-sku" }
+        }
+      }
+    }
+  }
+}
