@@ -24,6 +24,7 @@ type BatchOptions struct {
 	Profile     string
 	Browser     string // TLS fingerprint: chrome|firefox|random ("" = stock)
 	Cookies     string
+	Lang        string // verbatim Accept-Language override
 	Scope       clean.Scope
 }
 
@@ -53,7 +54,7 @@ func Batch(ctx context.Context, d Deps, urls []string, o BatchOptions) ([]BatchI
 	for i, u := range urls {
 		g.Go(func() error {
 			res, err := Run(ctx, d, u, Options{
-				Render: o.Render, Profile: o.Profile, Browser: o.Browser, Cookies: o.Cookies, Scope: o.Scope,
+				Render: o.Render, Profile: o.Profile, Browser: o.Browser, Cookies: o.Cookies, Lang: o.Lang, Scope: o.Scope,
 			})
 			if err != nil {
 				out[i] = BatchItem{URL: u, Error: err.Error()}

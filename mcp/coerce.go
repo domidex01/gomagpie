@@ -254,12 +254,14 @@ func (in *ScrapeIn) UnmarshalJSON(data []byte) error {
 		OnlyMainContent json.RawMessage `json:"only_main_content"`
 		Profile         string          `json:"profile"`
 		Cookies         string          `json:"cookies"`
+		Actions         json.RawMessage `json:"actions"`
+		Lang            string          `json:"lang"`
 	}
 	if err := json.Unmarshal(data, &sh); err != nil {
 		return err
 	}
-	in.URL, in.Render, in.PageFormat, in.Profile, in.Cookies =
-		sh.URL, sh.Render, sh.PageFormat, sh.Profile, sh.Cookies
+	in.URL, in.Render, in.PageFormat, in.Profile, in.Cookies, in.Lang =
+		sh.URL, sh.Render, sh.PageFormat, sh.Profile, sh.Cookies, sh.Lang
 	if err := decodeFlexField("schema", sh.Schema, &in.Schema); err != nil {
 		return err
 	}
@@ -270,6 +272,9 @@ func (in *ScrapeIn) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if err := decodeFlexField("exclude", sh.Exclude, &in.Exclude); err != nil {
+		return err
+	}
+	if err := decodeFlexField("actions", sh.Actions, &in.Actions); err != nil {
 		return err
 	}
 	return decodeFlexField("only_main_content", sh.OnlyMainContent, &in.OnlyMainContent)

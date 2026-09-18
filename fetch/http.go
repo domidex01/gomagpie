@@ -303,6 +303,11 @@ func (s *StaticFetcher) do(ctx context.Context, req FetchRequest) (*FetchRespons
 	for k, v := range headers {
 		hreq.Header.Set(k, v)
 	}
+	// Lang overrides the profile bundle's Accept-Language — one merge
+	// site, after profiles (profile maps are never mutated).
+	if req.Lang != "" {
+		hreq.Header.Set("Accept-Language", req.Lang)
+	}
 	cookies := req.Cookies
 	if cookies != "" {
 		hreq.Header.Set("Cookie", cookies)

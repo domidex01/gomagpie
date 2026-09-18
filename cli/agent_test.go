@@ -236,8 +236,8 @@ func TestVertical_List(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("--list not JSON: %v", err)
 	}
-	if len(doc.Extractors) != 10 {
-		t.Errorf("extractors = %d, want 10", len(doc.Extractors))
+	if len(doc.Extractors) != 15 {
+		t.Errorf("extractors = %d, want 15 (10 pre-H + 5 Phase H)", len(doc.Extractors))
 	}
 }
 

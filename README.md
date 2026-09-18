@@ -135,6 +135,9 @@ magpie scrape https://example.com/docs --include '.main,.content' --exclude 'nav
 | `--only-main-content` | flag | Main-content only (trafilatura already does this) |
 | `--vertical` | `auto` or a name (`magpie vertical --list`) | Zero-LLM typed extractor instead of LLM/generic path |
 | `--viewport` | `WxH`, e.g. `1280x800` | Screenshot page size (page-format screenshot only) |
+| `--action` | DSL line (repeatable, see [Actions DSL](#actions-dsl)) | Browser interaction executed by rod before capture |
+| `--actions` | path | Action file: one action per line, `#` comments (file lines run first) |
+| `--lang` | e.g. `fr-CA,fr;q=0.9` | Accept-Language header value (overrides the profile bundle; no control characters) |
 | `--provider` / `--model` | see [Providers](#providers) | LLM provider + model for `--schema` extraction |
 | `--format` | `json\|jsonl` (default json) | Envelope format |
 | `--no-cache` | flag | Bypass the learned selector cache |
@@ -177,6 +180,7 @@ cat urls.txt | magpie batch --file - --render static
 | `--browser` | `chrome\|firefox\|random` | TLS-impersonating fingerprint |
 | `--profile` | `default\|chrome\|firefox` | Request header bundle |
 | `--cookies` | `"a=b; c=d"` | Raw Cookie header value |
+| `--lang` | e.g. `fr-CA,fr;q=0.9` | Accept-Language header value |
 | `--include` / `--exclude` | CSS selectors | Scope every page the same way |
 | `--only-main-content` | flag | Main-content only |
 
@@ -218,6 +222,57 @@ cat snapshot.md | magpie diff https://example.com --against -
 Identical input prints nothing and exits 0. `--against` is required;
 `-` reads the snapshot from stdin.
 
+#### `magpie watch <url>` — monitor a page for changes, zero LLM
+
+```bash
+magpie watch https://example.com/pricing --every 1h                 # loop, Ctrl-C exits 0
+magpie watch https://example.com/pricing --once                     # single check (cron mode)
+magpie watch https://example.com/pricing --every 5m --webhook https://hooks.local/magpie
+```
+
+Every check stores a snapshot in the cache DB; on change the word-diff
+prints (`changed=true old=… new=…`) and `--webhook` receives exactly one
+`POST {url, changed, old_hash, new_hash, diff}`. Silence on no-change,
+exit 0 on change or not. `--once` is the cron/systemd-timer mode.
+
+| Flag | Values / default | Action |
+| :-- | :-- | :-- |
+| `--every` | duration, e.g. `5m`, `1h` (**required**, floor 30s) | Check interval |
+| `--once` | flag | Run one check and exit (loop skipped) |
+| `--webhook` | URL | POSTed the JSON change payload (operator-chosen endpoint) |
+| `--render` | `auto\|static\|browser` | Fetch mode |
+| `--lang` | e.g. `fr-CA,fr;q=0.9` | Accept-Language override |
+
+#### Actions DSL — drive the browser before capture
+
+`--action`/`--actions` (scrape) run rod interactions in order inside the
+fetch session, then capture the final DOM. Actions force browser
+rendering — `--render static` is rejected. One action per line; `type`,
+`screenshot`, and `eval-js` take the rest of the line (spaces need no
+quoting); `#` comments and blank lines are skipped; a single `wait` caps
+at 30000 ms (use repeated `wait` lines). Malformed lines exit 2 naming
+the verb and line number, before any I/O.
+
+| Verb | Example | Action |
+| :-- | :-- | :-- |
+| `click` | `click #consent-accept` | Click the first matching element |
+| `type` | `type #search unicode scraper` | Select-all + type text (replace semantics) |
+| `scroll` | `scroll bottom` / `scroll 500` | To top/bottom, or by N pixels |
+| `wait` | `wait 1200` | Fixed pause (≤ 30000 ms) |
+| `wait-for` | `wait-for .row:nth-of-type(30)` | Auto-wait until the selector exists (bounded by the fetch budget) |
+| `screenshot` | `screenshot /tmp/shot.png` | Viewport PNG mid-flow (**CLI-only** — rejected on MCP `scrape_url`) |
+| `eval-js` | `eval-js window.scrollTo(0, document.body.scrollHeight)` | Run arbitrary JS, result discarded |
+
+```bash
+magpie scrape https://example.com/list --action 'click .load-more' \
+  --action 'wait-for .row:nth-of-type(30)'
+magpie scrape https://example.com/form --actions flow.txt --page-format screenshot --viewport 1280x800
+```
+
+Slow pages: the fetch keeps a fixed settle — no implicit network-idle
+wait; add explicit `wait`/`wait-for` lines. Actions need the browser
+(rod launches Chrome on first use).
+
 #### `magpie brand <url>` — brand surface as JSON, zero LLM
 
 ```bash
@@ -230,9 +285,10 @@ never empty. Only flag is `--out`.
 #### `magpie vertical` — zero-LLM typed extraction
 
 ```bash
-magpie vertical --list                                   # all 10 extractors
+magpie vertical --list                                   # all 15 extractors
 magpie vertical https://arxiv.org/abs/1706.03762         # strict auto-dispatch
 magpie vertical https://shop.myshop.com/products/hoodie --name shopify_product
+magpie vertical https://example.com/anything --name og   # generic OG/meta, explicit only
 ```
 
 | Flag | Action |
@@ -241,8 +297,13 @@ magpie vertical https://shop.myshop.com/products/hoodie --name shopify_product
 | `--name` | Extractor name (default `auto` = strict dispatch, no guessing) |
 
 Built-in extractors: `arxiv`, `shopify_product`, `ecommerce_product`,
-`github_repo`, `pypi`, `npm`, `crates_io`, `reddit`, `hackernews`,
-`youtube`.
+`github_repo`, `pypi`, `npm`, `crates_io`, `reddit` (permalink comment
+trees via .json, depth 10 / 200 comments), `hackernews`, `youtube`,
+`stackoverflow`, `trustpilot`, `dockerhub`, `huggingface`, `og`.
+
+`og` is **OptIn**: it matches every URL, so it only fires with an
+explicit `--name og` — auto-dispatch never selects it, keeping the
+default scrape output shape stable.
 
 #### `magpie crawl <url>` — BFS crawl + extract a site
 
@@ -252,6 +313,7 @@ magpie crawl https://example.com/docs --schema page.yaml --path-prefix /docs \
   --include '**/docs/**' --exclude '**/api/**' --max-pages 50 --max-depth 3
 magpie crawl https://example.com --schema page.yaml --exporter-cmd ./embed.sh
 magpie crawl https://example.com --schema page.yaml --resume <run_id>
+magpie crawl --status <run_id>
 ```
 
 | Flag | Values / default | Action |
@@ -270,6 +332,8 @@ magpie crawl https://example.com --schema page.yaml --resume <run_id>
 | `--no-sitemap` | flag | Skip sitemap seed expansion |
 | `--ignore-robots` | flag | Fetch despite robots.txt (prints a warning) |
 | `--browser` | fingerprint (see scrape) | TLS impersonation for all fetches |
+| `--lang` | e.g. `fr-CA,fr;q=0.9` | Accept-Language header value for all fetches |
+| `--status` | `run_id` | Print a run's status row + `pending/inflight/done/errors` counts instead of crawling (unknown id exits 4) |
 | `--provider` / `--model` | see [Providers](#providers) | LLM provider + model |
 | `--exporter-cmd` | program | Pipe each record as JSONL to its stdin, in addition to `--out` |
 | `--resume` | `run_id` | Resume a checkpointed run |
@@ -397,7 +461,7 @@ env > OS keyring > config file.
 | 1 | runtime error |
 | 2 | usage error — incl. non-public/SSRF-rejected URLs and proxy-pool config errors |
 | 3 | all-failed (batch/crawl) |
-| 4 | partial success |
+| 4 | partial success — incl. `crawl --status` with an unknown run_id |
 | 5 | robots-blocked |
 | 6 | cost ceiling reached |
 | 7 | credentials missing (with the set-key hint) |
@@ -531,7 +595,7 @@ Claude Desktop config (`{ "mcpServers": { "magpie": {
 
 | Tool | Action |
 | :-- | :-- |
-| `scrape_url` | Fetch → clean → extract one URL (schema optional) |
+| `scrape_url` | Fetch → clean → extract one URL (schema optional; `actions` DSL lines and `lang` accepted — the `screenshot` action verb is CLI-only) |
 | `crawl_site` | Crawl a site, or poll a previous run via `run_id` (with progress) |
 | `extract_structured` | Extract from HTML/markdown, no fetch (schema) or plain text (prompt) |
 | `get_cached_selectors` | List cached selectors for a domain |

@@ -3,6 +3,7 @@ package vertical
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -53,22 +54,28 @@ func isPermalink(u *url.URL) bool {
 
 func extractReddit(ctx context.Context, f Fetcher, u *url.URL) (map[string]any, error) {
 	old := "https://old.reddit.com" + u.RequestURI()
-	body, err := fetchBytes(ctx, f, old)
-	if err == nil {
-		if isPermalink(u) {
-			return redditPostFromHTML(body, "https://www.reddit.com"+u.RequestURI()), nil
+	www := "https://www.reddit.com" + u.RequestURI()
+	if isPermalink(u) {
+		// Permalinks go .json-first: the comment tree is the payload.
+		// Subreddit listings stay HTML-first, and HTML remains the
+		// permalink fallback (old summary shape) for any .json failure —
+		// HTTP or decode, a shape drift must degrade, not break.
+		if jbody, jerr := fetchBytes(ctx, f, old+".json"); jerr == nil {
+			if rec, perr := redditThreadFromJSON(jbody, www); perr == nil {
+				return rec, nil
+			}
 		}
-		return redditSubredditFromHTML(body, "https://www.reddit.com"+u.RequestURI()), nil
+		body, herr := fetchBytes(ctx, f, old)
+		if herr != nil {
+			return nil, herr
+		}
+		return redditPostFromHTML(body, www), nil
 	}
-	// .json retry fires ONLY for comment permalinks on HTML failure.
-	if !isPermalink(u) {
+	body, err := fetchBytes(ctx, f, old)
+	if err != nil {
 		return nil, err
 	}
-	jbody, jerr := fetchBytes(ctx, f, old+".json")
-	if jerr != nil {
-		return nil, jerr
-	}
-	return redditPostFromJSON(jbody, "https://www.reddit.com"+u.RequestURI())
+	return redditSubredditFromHTML(body, www), nil
 }
 
 func redditPostFromHTML(body []byte, url string) map[string]any {
@@ -114,30 +121,89 @@ func redditSubredditFromHTML(body []byte, url string) map[string]any {
 	}
 }
 
-func redditPostFromJSON(body []byte, url string) (map[string]any, error) {
-	first, err := firstJSONArray(body)
-	if err != nil {
+// redditThreadFromJSON parses the two-listing permalink .json shape:
+// [0] = post listing, [1] = comments listing. Emits the flat post fields
+// plus a nested comments tree (author/score/body/created/replies).
+func redditThreadFromJSON(body []byte, url string) (map[string]any, error) {
+	var listing []any
+	if err := json.Unmarshal(body, &listing); err != nil {
 		return nil, fmt.Errorf("vertical: reddit .json: %w", err)
 	}
-	data0 := child(first, "data")
-	kids, _ := data0["children"].([]any)
+	if len(listing) == 0 {
+		return nil, fmt.Errorf("vertical: reddit .json: empty listing")
+	}
+	kids, _ := child(anyMap(listing[0]), "data")["children"].([]any)
 	if len(kids) == 0 {
 		return nil, fmt.Errorf("vertical: reddit .json: no children")
 	}
-	d, _ := kids[0].(map[string]any)
-	data, _ := d["data"].(map[string]any)
-	if data == nil {
+	data, _ := kids[0].(map[string]any)
+	post, _ := data["data"].(map[string]any)
+	if post == nil {
 		return nil, fmt.Errorf("vertical: reddit .json: bad child shape")
+	}
+	var comments []any
+	if len(listing) > 1 {
+		w := &redditCommentWalker{}
+		comments = w.walk(listing[1], 0)
 	}
 	return map[string]any{
 		"kind":     "post",
-		"title":    str(data, "title"),
-		"author":   str(data, "author"),
-		"score":    num(data, "score"),
-		"comments": num(data, "num_comments"),
-		"selftext": str(data, "selftext"),
+		"title":    str(post, "title"),
+		"author":   str(post, "author"),
+		"score":    num(post, "score"),
+		"selftext": str(post, "selftext"),
+		"comments": comments,
 		"url":      url,
 	}, nil
+}
+
+// anyMap type-asserts a decoded JSON value to an object (nil when not).
+func anyMap(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}
+
+// Comment-tree caps. ponytail: depth 10 / total 200; deeper needs the
+// `more`-object API pagination as the upgrade path.
+const (
+	redditMaxDepth    = 10
+	redditMaxComments = 200
+)
+
+// redditCommentWalker flattens the recursive replies field into comment
+// maps, tracking total count across all levels. Children that are not
+// comments (the `more` placeholder) are skipped without error.
+type redditCommentWalker struct{ total int }
+
+func (w *redditCommentWalker) walk(listing any, depth int) []any {
+	out := []any{}
+	kids, _ := child(anyMap(listing), "data")["children"].([]any)
+	for _, kid := range kids {
+		if w.total >= redditMaxComments {
+			return out
+		}
+		cm, _ := kid.(map[string]any)
+		if kind, _ := cm["kind"].(string); kind != "t1" {
+			continue
+		}
+		d := child(cm, "data")
+		if d == nil {
+			continue
+		}
+		w.total++
+		c := map[string]any{
+			"author":  str(d, "author"),
+			"score":   num(d, "score"),
+			"body":    str(d, "body"),
+			"created": num(d, "created_utc"),
+			"replies": []any{},
+		}
+		if depth+1 < redditMaxDepth {
+			c["replies"] = w.walk(d["replies"], depth+1)
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // parseCount pulls the first integer from label text ("42 comments" → 42,

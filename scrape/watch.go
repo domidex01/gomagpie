@@ -1,0 +1,117 @@
+package scrape
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	"magpie/fetch"
+)
+
+// WatchResult is one watch check. WebhookStatus: "" (not fired —
+// no change or no webhook), "sent", or "failed: …".
+type WatchResult struct {
+	URL           string
+	Changed       bool
+	OldHash       string
+	NewHash       string
+	Diff          string
+	WebhookStatus string
+	CheckedAt     time.Time
+}
+
+// CheckForChange runs one zero-LLM check: scrape the URL markdown-only,
+// hash it, compare against the latest snapshot, diff on change, ALWAYS
+// store the snapshot (first run = baseline), then fire the webhook once
+// on change. A webhook failure is recorded in WatchResult.WebhookStatus,
+// never returned — the snapshot is already stored and a dead sink must
+// not fail the check (cron re-runs are the retry).
+func CheckForChange(ctx context.Context, d Deps, rawURL string, o Options) (WatchResult, error) {
+	// Zero-LLM is enforced, not hoped for: a caller-supplied schema must
+	// never turn a price watch into token spend.
+	o.Schema = nil
+	res, err := Run(ctx, d, rawURL, o)
+	if err != nil {
+		return WatchResult{}, err
+	}
+	newHash := sha256Hex(res.Markdown)
+	out := WatchResult{URL: rawURL, NewHash: newHash, CheckedAt: time.Now().UTC()}
+	prev, ok, err := d.DB.LatestSnapshot(rawURL)
+	if err != nil {
+		return WatchResult{}, err
+	}
+	if ok {
+		out.OldHash = prev.ContentHash
+		if prev.ContentHash != newHash {
+			out.Changed = true
+			diff, derr := DiffWords(prev.Markdown, res.Markdown)
+			if derr != nil {
+				return WatchResult{}, derr
+			}
+			out.Diff = diff
+		}
+	}
+	if err := d.DB.PutSnapshot(rawURL, newHash, res.Markdown, out.Changed); err != nil {
+		return WatchResult{}, err
+	}
+	if out.Changed && o.Webhook != "" {
+		out.WebhookStatus = postWebhook(ctx, rawURL, o.Webhook, out)
+	}
+	return out, nil
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+type webhookPayload struct {
+	URL     string `json:"url"`
+	Changed bool   `json:"changed"`
+	OldHash string `json:"old_hash"`
+	NewHash string `json:"new_hash"`
+	Diff    string `json:"diff"`
+}
+
+// postWebhook fires the change notification exactly once and returns the
+// status string. The client is built INLINE with AllowPrivate: the
+// webhook URL is operator-chosen on the command line — the same trust
+// tier as MAGPIE_PROXY_FILE and MAGPIE_SEARXNG_URL (searxng precedent).
+// Never hoist this transport into a shared var: a future caller would
+// inherit the private-net allowance.
+func postWebhook(ctx context.Context, rawURL, webhookURL string, res WatchResult) string {
+	client := &http.Client{
+		Transport: fetch.GuardedTransportWithOptions(fetch.SSRFOptions{AllowPrivate: true}),
+		Timeout:   10 * time.Second,
+	}
+	body, err := json.Marshal(webhookPayload{
+		URL: rawURL, Changed: res.Changed,
+		OldHash: res.OldHash, NewHash: res.NewHash, Diff: res.Diff,
+	})
+	if err != nil {
+		return "failed: " + err.Error()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
+	if err != nil {
+		return "failed: " + err.Error()
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "failed: " + err.Error()
+	}
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // drain-close; failure unactionable
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return "failed: read response: " + err.Error()
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Sprintf("failed: HTTP %d", resp.StatusCode)
+	}
+	return "sent"
+}

@@ -77,6 +77,16 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     ts                TEXT NOT NULL,
     FOREIGN KEY(run_id) REFERENCES run_history(run_id)
 );
+
+CREATE TABLE IF NOT EXISTS snapshots (
+    url_hash     TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    markdown     TEXT NOT NULL,
+    checked_at   TEXT NOT NULL,
+    changed      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (url_hash, checked_at)
+);
 `
 
 // DB is a single-writer SQLite handle.
@@ -230,6 +240,8 @@ func (d *DB) LogLLMCall(runID string, c LLMCall) error {
 type RunInfo struct {
 	RunID            string
 	Command          string
+	StartedAt        string
+	FinishedAt       string // "" while still running
 	Status           string
 	PagesOK          int
 	PagesErr         int
@@ -245,8 +257,9 @@ type RunInfo struct {
 // GetRun reads a run_history status row; unknown ids error loudly.
 func (d *DB) GetRun(runID string) (RunInfo, error) {
 	var r RunInfo
-	err := d.db.QueryRow(`SELECT run_id, command, status, pages_ok, pages_err, prompt_tokens, completion_tokens, usd_estimate, fetch_pages, fetch_bytes, fetch_ms, proxy FROM run_history WHERE run_id=?`, runID).Scan(
-		&r.RunID, &r.Command, &r.Status, &r.PagesOK, &r.PagesErr, &r.PromptTokens, &r.CompletionTokens, &r.USDEstimate,
+	var finished sql.NullString
+	err := d.db.QueryRow(`SELECT run_id, command, started_at, finished_at, status, pages_ok, pages_err, prompt_tokens, completion_tokens, usd_estimate, fetch_pages, fetch_bytes, fetch_ms, proxy FROM run_history WHERE run_id=?`, runID).Scan(
+		&r.RunID, &r.Command, &r.StartedAt, &finished, &r.Status, &r.PagesOK, &r.PagesErr, &r.PromptTokens, &r.CompletionTokens, &r.USDEstimate,
 		&r.FetchPages, &r.FetchBytes, &r.FetchMs, &r.Proxy)
 	if err == sql.ErrNoRows {
 		return RunInfo{}, fmt.Errorf("store: unknown run_id %q", runID)
@@ -254,6 +267,7 @@ func (d *DB) GetRun(runID string) (RunInfo, error) {
 	if err != nil {
 		return RunInfo{}, fmt.Errorf("store: get run: %w", err)
 	}
+	r.FinishedAt = finished.String
 	return r, nil
 }
 
@@ -612,6 +626,7 @@ var tables = map[string]bool{
 	"dedup":          true,
 	"run_history":    true,
 	"llm_calls":      true,
+	"snapshots":      true,
 	"records":        true, // created on demand by sqlite-format crawls
 }
 

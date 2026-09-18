@@ -13,6 +13,10 @@ type FetchRequest struct {
 	Profile string        // header profile: default|chrome|firefox (unknown = default)
 	Browser string        // TLS fingerprint: chrome|firefox|random ("" = stock TLS)
 	Cookies string        // raw Cookie header value, passed through verbatim
+	// Lang overrides the profile's Accept-Language verbatim (no BCP47
+	// policing — validation rejects control characters at the options
+	// boundary). Rod sets it as a page-level extra header.
+	Lang string
 }
 
 // FetchResponse is the fetched page.

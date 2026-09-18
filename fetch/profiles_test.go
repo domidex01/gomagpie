@@ -261,3 +261,78 @@ func TestHeaderProfiles_MatchLibrary(t *testing.T) {
 		}
 	}
 }
+
+// --- Phase H: the --lang knob (Accept-Language override). ---
+
+// langEcho reports the Accept-Language the origin actually saw.
+func langEcho(t *testing.T) (*httptest.Server, func() string) {
+	t.Helper()
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Accept-Language")
+		_, _ = io.WriteString(w, "ok") //nolint:errcheck // httptest local
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() string { return got }
+}
+
+func TestAcceptLanguage_BareOverride(t *testing.T) {
+	srv, saw := langEcho(t)
+	if _, err := fetch.NewStaticFetcher(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := fetch.NewStaticFetcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: srv.URL, Lang: "fr-CA,fr;q=0.9"}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if saw() != "fr-CA,fr;q=0.9" {
+		t.Errorf("Accept-Language = %q, want the lang value verbatim", saw())
+	}
+}
+
+// The override beats the chrome profile's en-US — overriding a same-value
+// default would prove nothing; chrome's distinct en-US makes it unambiguous.
+func TestAcceptLanguage_ProfileOverride(t *testing.T) {
+	srv, saw := langEcho(t)
+	f, err := fetch.NewStaticFetcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: srv.URL, Profile: "chrome", Lang: "fr-CA,fr;q=0.9"}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if saw() != "fr-CA,fr;q=0.9" {
+		t.Errorf("Accept-Language = %q, want lang to override the chrome en-US default", saw())
+	}
+	// Profile still active around the override.
+	var ua string
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		_, _ = io.WriteString(w, "ok") //nolint:errcheck // httptest local
+	}))
+	t.Cleanup(srv2.Close)
+	if _, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: srv2.URL, Profile: "chrome", Lang: "fr-CA,fr;q=0.9"}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if !strings.Contains(ua, "Chrome/126") {
+		t.Errorf("UA = %q, want chrome profile still applied", ua)
+	}
+}
+
+// Empty lang keeps the profile default (chrome = en-US).
+func TestAcceptLanguage_DefaultIntact(t *testing.T) {
+	srv, saw := langEcho(t)
+	f, err := fetch.NewStaticFetcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Fetch(t.Context(), fetch.FetchRequest{URL: srv.URL, Profile: "chrome"}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if saw() != "en-US,en;q=0.9" {
+		t.Errorf("Accept-Language = %q, want the chrome profile default", saw())
+	}
+}

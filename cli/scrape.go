@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"magpie/clean"
 	"magpie/config"
@@ -22,17 +23,31 @@ func newScrapeCmd() *cobra.Command {
 	var include, exclude []string
 	var onlyMainContent bool
 	var verticalName string
+	var actionLines []string
+	var actionsFile, lang string
 	cmd := &cobra.Command{
 		Use:   "scrape <url>",
 		Short: "Fetch → clean → extract a single URL",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Action file lines run first, then inline --action lines in
+			// flag order (proxy-file precedent for the file format).
+			var actions []string
+			if actionsFile != "" {
+				lines, err := readActionLines(actionsFile)
+				if err != nil {
+					return err
+				}
+				actions = append(actions, lines...)
+			}
+			actions = append(actions, actionLines...)
 			return runScrape(cmd.Context(), args[0], scrapeOptions{
 				Schema: schema, Render: render, Provider: provider, Model: model,
 				Out: out, Format: format, NoCache: noCache,
 				PageFormat: pageFormat, Include: include, Exclude: exclude,
 				OnlyMainContent: onlyMainContent, HeaderProfile: headerProfile, Cookies: cookies,
 				Browser: browser, Vertical: verticalName, Viewport: viewport,
+				Actions: actions, Lang: lang,
 			})
 		},
 	}
@@ -52,7 +67,21 @@ func newScrapeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: "+fetch.BrowserHelp)
 	cmd.Flags().StringVar(&viewport, "viewport", "", "screenshot viewport WxH, e.g. 1280x800 (page-format screenshot only)")
 	cmd.Flags().StringVar(&verticalName, "vertical", "", "zero-LLM typed extractor: auto or a name (default off; `magpie vertical --list` in Phase C)")
+	cmd.Flags().StringSliceVar(&actionLines, "action", nil, "browser action line, repeatable: click <sel> | type <sel> <text…> | scroll <n|top|bottom> | wait <ms> | wait-for <sel> | screenshot <path> | eval-js <expr…>")
+	cmd.Flags().StringVar(&actionsFile, "actions", "", "action file: one action per line, # comments, rest-of-line args need no quoting")
+	cmd.Flags().StringVar(&lang, "lang", "", "Accept-Language header value, e.g. fr-CA,fr;q=0.9 (no control characters)")
 	return cmd
+}
+
+// readActionLines reads a proxy-file-style action file: one action per
+// line; blanks and # comments are skipped by the parser but kept here so
+// inline line numbers stay aligned with the file.
+func readActionLines(path string) ([]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fail(2, "read actions file: %v", err)
+	}
+	return strings.Split(string(raw), "\n"), nil
 }
 
 type scrapeOptions struct {
@@ -75,6 +104,10 @@ type scrapeOptions struct {
 	Viewport        string
 	// Vertical is flag-only (auto|name, default off): validated pre-I/O.
 	Vertical string
+	// Actions are browser action lines (file first, then inline) and Lang
+	// the Accept-Language override; both validated pre-I/O by scrape.
+	Actions []string
+	Lang    string
 }
 
 func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
@@ -94,10 +127,12 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		return fail(2, "format %q must be json|jsonl", cfg.Format)
 	}
 	// One validation site (scrape owns the switches): render, page format,
-	// browser fingerprint, vertical name — all pre-I/O, exit 2 via exitFor.
+	// browser fingerprint, vertical name, actions, lang — all pre-I/O,
+	// exit 2 via exitFor.
 	if err := scrape.ValidateOptions(scrape.Options{
 		Render: cfg.Render, PageFormat: o.PageFormat,
 		Browser: o.Browser, Vertical: o.Vertical,
+		Actions: o.Actions, Lang: o.Lang,
 	}); err != nil {
 		return err
 	}
@@ -132,6 +167,7 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		Scope:      clean.Scope{Include: o.Include, Exclude: o.Exclude, OnlyMainContent: o.OnlyMainContent},
 		Profile:    o.HeaderProfile, Cookies: o.Cookies, Browser: o.Browser,
 		Vertical: o.Vertical, Viewport: o.Viewport,
+		Actions: o.Actions, Lang: o.Lang,
 	})
 	if err != nil {
 		return keyHint(err) // exitFor owns the code mapping

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"magpie/clean"
@@ -38,6 +39,8 @@ type ScrapeIn struct {
 	Profile         string     `json:"profile,omitempty" jsonschema:"header profile: default, chrome, firefox, safari, edge, ios, or chrome_android"`
 	Browser         string     `json:"browser,omitempty" jsonschema:"TLS-impersonating browser fingerprint: chrome, firefox, safari, edge, ios, chrome_android, or random"`
 	Cookies         string     `json:"cookies,omitempty" jsonschema:"raw Cookie header value"`
+	Actions         StringList `json:"actions,omitempty" jsonschema:"browser action lines (rod), one per element: click <sel> | type <sel> <text> | scroll <n|top|bottom> | wait <ms> | wait-for <sel> | eval-js <expr>; forces browser rendering; screenshot is CLI-only"`
+	Lang            string     `json:"lang,omitempty" jsonschema:"Accept-Language header value, e.g. fr-CA,fr;q=0.9 (no control characters)"`
 }
 
 // ScrapeOut is the scrape_url output.
@@ -54,6 +57,19 @@ type ScrapeOut struct {
 
 func handleScrape(d Deps) func(context.Context, *sdk.CallToolRequest, ScrapeIn) (*sdk.CallToolResult, ScrapeOut, error) {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in ScrapeIn) (*sdk.CallToolResult, ScrapeOut, error) {
+		// The screenshot action verb never crosses the MCP boundary: an
+		// action line would hand an agent a server-side file-write to an
+		// arbitrary path. page_format screenshot stays base64-through-
+		// envelope. Pre-flight, before any browser launch.
+		for i, line := range in.Actions {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			if verb, _, _ := strings.Cut(trimmed, " "); verb == "screenshot" {
+				return nil, ScrapeOut{}, fmt.Errorf("mcp: scrape_url: screenshot action is CLI-only (line %d); use page_format screenshot for base64", i+1)
+			}
+		}
 		var sch *extract.Schema
 		if len(in.Schema) > 0 {
 			raw, err := json.Marshal(in.Schema)
@@ -79,6 +95,7 @@ func handleScrape(d Deps) func(context.Context, *sdk.CallToolRequest, ScrapeIn) 
 			PageFormat: in.PageFormat,
 			Scope:      clean.Scope{Include: []string(in.Include), Exclude: []string(in.Exclude), OnlyMainContent: onlyMain},
 			Profile:    in.Profile, Cookies: in.Cookies, Browser: in.Browser,
+			Actions: []string(in.Actions), Lang: in.Lang,
 		})
 		if err != nil {
 			return nil, ScrapeOut{}, fmt.Errorf("mcp: scrape_url: %w", err)

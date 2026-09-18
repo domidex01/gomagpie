@@ -1,0 +1,10 @@
+[
+  {"kind":"Listing","data":{"children":[{"kind":"t3","data":{"title":"Demo thread title","author":"threaduser","score":321,"num_comments":3,"selftext":"The selftext body of the demo thread with a few extra words.","created_utc":1690000000.0}}]}},
+  {"kind":"Listing","data":{"children":[
+    {"kind":"t1","data":{"author":"alice","score":50,"body":"Top comment body here.","created_utc":1690000100.0,"replies":{"kind":"Listing","data":{"children":[
+      {"kind":"t1","data":{"author":"bob","score":10,"body":"Nested reply body.","created_utc":1690000200.0,"replies":""}}
+    ]}}}},
+    {"kind":"t1","data":{"author":"carol","score":25,"body":"Second top-level comment.","created_utc":1690000300.0,"replies":""}},
+    {"kind":"more","data":{"children":["d","e"],"count":2}}
+  ]}}
+]

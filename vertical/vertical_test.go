@@ -93,6 +93,9 @@ func TestList_ExactNameSet(t *testing.T) {
 		"github_repo": true, "pypi": true, "npm": true, "crates_io": true,
 		"reddit": true, "hackernews": true, "arxiv": true, "youtube": true,
 		"shopify_product": true, "ecommerce_product": true,
+		// Phase H additions.
+		"stackoverflow": true, "trustpilot": true, "dockerhub": true,
+		"huggingface": true, "og": true,
 	}
 	got := map[string]bool{}
 	for _, info := range vertical.List() {

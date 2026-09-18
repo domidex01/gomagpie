@@ -713,6 +713,52 @@ magpie cache inspect --domain amazon.fr
   zero-key deployment), while SERP hit URLs scrape through the strict
   pipeline.
 
+### 10.5 P1 differentiation (Phase H delta)
+
+- **Actions DSL:** `scrape --action` (repeatable) / `--actions <file>` /
+  MCP `scrape_url` `actions` run rod interactions before capture: `click
+  <sel>` · `type <sel> <text…>` · `scroll <n|top|bottom>` · `wait <ms>`
+  (cap 30000) · `wait-for <sel>` · `screenshot <path>` · `eval-js
+  <expr…>`. One action per line; `type`/`screenshot`/`eval-js` take the
+  rest of the line (no quoting); `#` comments skipped; errors name the
+  verb + 1-based line and exit 2 pre-I/O. Actions force browser
+  rendering (`render=static` rejected); `RodFetcher.Fetch` is a nil-
+  actions delegate of the same code path, so non-action behavior cannot
+  drift. `screenshot` is CLI-only — `handleScrape` rejects the verb at
+  the MCP boundary (an action line must never become an agent's
+  server-side file-write); `page_format screenshot` stays base64-through-
+  envelope. The fetch keeps a fixed settle: no implicit network-idle —
+  slow pages get explicit `wait`/`wait-for` lines.
+- **Watch:** `magpie watch <url> --every <d> [--once] [--webhook URL]`
+  stores a markdown snapshot per check (snapshots table, `checked_at`
+  RFC3339Nano under PK `(url_hash, checked_at)` — append-only, no
+  pruning), word-diffs on change, and fires exactly one POST
+  `{url, changed, old_hash, new_hash, diff}`. `--every` floors at 30s;
+  `--once` is the cron mode; Ctrl-C exits 0. The webhook client is
+  built inline with `AllowPrivate: true` (operator-chosen endpoint,
+  searxng trust tier — never shared), single attempt; failure lands in
+  `WatchResult.WebhookStatus`, never fails the check. Checks are
+  markdown-only by construction (schema cleared) — zero LLM.
+- **Locale:** `--lang` (scrape, batch, crawl, watch, MCP `lang`) sets
+  `Accept-Language` verbatim, overriding the profile bundle; values with
+  control characters are rejected at `ValidateOptions` (header-injection
+  boundary). No `--country` flag: a country implies IP geo, which is
+  already expressible as a proxy-pool entry; a fake knob would silently
+  do nothing on direct connections.
+- **Vertical breadth:** `stackoverflow` (SE API, `filter=withbody`),
+  `trustpilot` (embedded JSON-LD via goquery — no JSON-LD is a loud
+  error), `dockerhub`, `huggingface` (models carry `pipeline_tag`,
+  datasets omit it), and reddit permalinks now go `.json`-first,
+  emitting nested `comments` trees capped at depth 10 / 200 total (the
+  `more`-object pagination is the upgrade path); the HTML summary shape
+  remains the fallback. `og` is a generic OG/Twitter-meta extractor and
+  is **OptIn by design** (deviation from the competitive analysis):
+  our contract guarantees permissives never auto-fire — an always-on
+  extractor would attach a `Record` to every scrape and silently change
+  the default output shape for all users; explicit `--vertical og`/
+  MCP selection covers the use case honestly. `crawl --status <run_id>`
+  is CLI parity for the MCP poll (unknown id exits 4, handler-local).
+
 ---
 
 ## 11. POLITENESS & SAFETY DEFAULTS

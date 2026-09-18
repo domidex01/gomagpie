@@ -18,7 +18,7 @@ import (
 )
 
 func newCrawlCmd() *cobra.Command {
-	var schema, format, out, resume string
+	var schema, format, out, resume, status string
 	var maxPages, maxDepth, concurrency int
 	var sameHost bool
 	var rate float64
@@ -27,12 +27,26 @@ func newCrawlCmd() *cobra.Command {
 	var pathPrefix string
 	var include, exclude []string
 	var allowSubdomains, noSitemap bool
-	var browser string
+	var browser, lang string
 	cmd := &cobra.Command{
 		Use:   "crawl <url>",
 		Short: "BFS crawl + extract a site",
-		Args:  cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if status != "" {
+				if len(args) != 0 {
+					return fmt.Errorf("crawl: --status takes no URL argument")
+				}
+				return nil
+			}
+			if len(args) != 1 {
+				return fmt.Errorf("accepts 1 arg(s), received %d", len(args))
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if status != "" {
+				return runCrawlStatus(status)
+			}
 			return runCrawl(cmd.Context(), args[0], crawlCLIOptions{
 				Schema: schema, Format: format, Out: out, Resume: resume,
 				MaxPages: maxPages, MaxDepth: maxDepth, Concurrency: concurrency,
@@ -40,6 +54,7 @@ func newCrawlCmd() *cobra.Command {
 				Provider: provider, Model: model, ExporterCmd: exporterCmd,
 				PathPrefix: pathPrefix, Include: include, Exclude: exclude,
 				AllowSubdomains: allowSubdomains, NoSitemap: noSitemap, Browser: browser,
+				Lang: lang,
 			})
 		},
 	}
@@ -57,6 +72,8 @@ func newCrawlCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&allowSubdomains, "allow-subdomains", false, "follow links into subdomains of the seed host")
 	cmd.Flags().BoolVar(&noSitemap, "no-sitemap", false, "skip sitemap seed expansion")
 	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: "+fetch.BrowserHelp)
+	cmd.Flags().StringVar(&lang, "lang", "", "Accept-Language header value, e.g. fr-CA,fr;q=0.9 (no control characters)")
+	cmd.Flags().StringVar(&status, "status", "", "print a run's status row + pending/inflight/done/errors counts instead of crawling")
 	cmd.Flags().Float64Var(&rate, "rate", 1, "per-host requests/sec")
 	cmd.Flags().BoolVar(&ignoreRobots, "ignore-robots", false, "fetch despite robots.txt (prints a warning)")
 	cmd.Flags().StringVar(&provider, "provider", "", ProviderHelp)
@@ -87,6 +104,55 @@ type crawlCLIOptions struct {
 	AllowSubdomains bool
 	NoSitemap       bool
 	Browser         string
+	Lang            string
+}
+
+// runCrawlStatus is the CLI twin of the MCP crawl_site run_id poll: the
+// run row plus frontier counts. Unknown ids fail handler-locally with
+// exit 4 (no exitFor arm — status misses are command-specific usage).
+func runCrawlStatus(runID string) error {
+	cfg, err := resolveConfig()
+	if err != nil {
+		return err
+	}
+	db, err := openCmdDB(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeDB(db)
+	info, err := db.GetRun(runID)
+	if err != nil {
+		return fail(4, "crawl: %v", err)
+	}
+	pending, inflight, done, errs, serr := db.CrawlStats(runID)
+	if serr != nil {
+		return serr
+	}
+	doc, merr := marshalOut(crawlStatusOut{
+		RunID: info.RunID, Command: info.Command,
+		StartedAt: info.StartedAt, FinishedAt: info.FinishedAt,
+		Status: info.Status, PagesOK: info.PagesOK, PagesErr: info.PagesErr,
+		Pending: pending, Inflight: inflight, Done: done, Errors: errs,
+	}, "crawl")
+	if merr != nil {
+		return merr
+	}
+	fmt.Println(doc)
+	return nil
+}
+
+type crawlStatusOut struct {
+	RunID      string `json:"run_id"`
+	Command    string `json:"command"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at,omitempty"`
+	Status     string `json:"status"`
+	PagesOK    int    `json:"pages_ok"`
+	PagesErr   int    `json:"pages_err"`
+	Pending    int    `json:"pending"`
+	Inflight   int    `json:"inflight"`
+	Done       int    `json:"done"`
+	Errors     int    `json:"errors"`
 }
 
 func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
@@ -130,8 +196,8 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	if o.ExporterCmd != "" {
 		cfg.ExporterCmd = o.ExporterCmd
 	}
-	// Pre-I/O: an unknown fingerprint must exit 2, never burn a fetch.
-	if err := scrape.ValidateOptions(scrape.Options{Browser: o.Browser}); err != nil {
+	// Pre-I/O: an unknown fingerprint or bad lang must exit 2, never burn a fetch.
+	if err := scrape.ValidateOptions(scrape.Options{Browser: o.Browser, Lang: o.Lang}); err != nil {
 		return err
 	}
 	if o.IgnoreRobots {
@@ -217,7 +283,7 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		AllowSubdomains: o.AllowSubdomains, NoSitemap: o.NoSitemap,
 		Format: cfg.Format, Out: cfg.Out, RunID: runID,
 		Resume: resuming, ResumeID: o.Resume, IgnoreRobots: o.IgnoreRobots,
-		Browser:  o.Browser,
+		Browser: o.Browser, Lang: o.Lang,
 		Provider: provider, Model: model, MaxCost: cfg.MaxCost,
 		DB: db, Extractor: ex, Propose: propose, OnRecord: onRecord,
 	})
