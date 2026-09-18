@@ -1,16 +1,20 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "price", "sku"],
   "properties": {
-    "products": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name":  { "type": "string", "selector": ".product .name" },
-          "price": { "type": "string", "selector": ".product .price" },
-          "sku":   { "type": "string", "selector": ".product", "attr": "data-sku" }
-        }
-      }
+    "name": {
+      "type": "string",
+      "x-magpie": { "css_hint": ".product .name", "trim": true }
+    },
+    "price": {
+      "type": "string",
+      "x-magpie": { "css_hint": ".product .price", "regex": "[0-9.]+" }
+    },
+    "sku": {
+      "type": "string",
+      "x-magpie": { "css_hint": ".product .sku", "regex": "MP-[0-9]+" }
     }
   }
 }

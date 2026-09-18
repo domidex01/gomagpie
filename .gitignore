@@ -4,3 +4,4 @@
 *.out
 .claude/
 .mcp.json
+.scratch/
