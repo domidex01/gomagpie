@@ -417,3 +417,34 @@ func TestScrape_ScreenshotDoc(t *testing.T) {
 		t.Errorf("page_format = %q, want screenshot", env["page_format"])
 	}
 }
+
+// TestScrape_PageFormatRawAndHTML: --page-format raw|html must print the
+// rendered page content itself — the markdown envelope has no field for
+// it, so falling through there silently dropped the requested content
+// (same silent-drop class as the screenshot regression).
+func TestScrape_PageFormatRawAndHTML(t *testing.T) {
+	testEnv(t, "cache.db")
+	abs := mustAbs(t, "../testdata/clean/article.html")
+	want, err := os.ReadFile("../testdata/clean/article.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "out.txt")
+
+	err = runScrape(t.Context(), "file://"+abs, scrapeOptions{PageFormat: "raw", Out: out, Render: "static"})
+	if err != nil {
+		t.Fatalf("raw: %v", err)
+	}
+	if got := mustRead(t, out); string(got) != string(want) {
+		t.Errorf("raw output %d bytes, want byte-equal body (%d)", len(got), len(want))
+	}
+
+	err = runScrape(t.Context(), "file://"+abs, scrapeOptions{PageFormat: "html", Out: out, Render: "static"})
+	if err != nil {
+		t.Fatalf("html: %v", err)
+	}
+	htmlOut := mustRead(t, out)
+	if len(htmlOut) == 0 || !strings.Contains(string(htmlOut), "<") {
+		t.Errorf("html output empty or not markup (%d bytes)", len(htmlOut))
+	}
+}

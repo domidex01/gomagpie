@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"gomagpie/crawl"
 
@@ -37,6 +38,13 @@ func runMap(ctx context.Context, site string, o mapOptions) error {
 	}
 	if format != "lines" && format != "json" {
 		return fail(2, "map: --format %q must be lines|json", o.Format)
+	}
+	// Validate at the boundary: crawl's sitemap client only speaks http(s)
+	// origins, and a late runtime error would exit 1 instead of the
+	// documented usage class (2).
+	if u, perr := url.Parse(site); perr != nil || u.Host == "" ||
+		(u.Scheme != "http" && u.Scheme != "https") {
+		return fail(2, "map: site must be an http(s) origin, got %q", site)
 	}
 	// Nil fetcher: ListSitemapURLs falls back to the static fetcher.
 	urls, truncated, err := crawl.ListSitemapURLs(ctx, nil, site)

@@ -160,10 +160,12 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		return writeOut(cfg.Out, vdoc)
 	}
 	if sch == nil {
-		if o.PageFormat == "json" {
-			return writeOut(cfg.Out, res.Rendered)
-		}
-		if o.PageFormat == "llm" || o.PageFormat == "text" {
+		// Content formats print the rendered page directly. html/raw must
+		// stay in this branch: markdownDoc's envelope has no field for
+		// them, so falling through would silently drop the requested
+		// content (the screenshot-drop bug, again).
+		switch o.PageFormat {
+		case "json", "llm", "text", "html", "raw":
 			return writeOut(cfg.Out, res.Rendered)
 		}
 		mdoc, merr := markdownDoc(res)

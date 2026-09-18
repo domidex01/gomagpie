@@ -377,3 +377,16 @@ func TestAgent_CommandsRegistered(t *testing.T) {
 		}
 	}
 }
+
+// TestMap_BadSiteExit2: a non-http(s) site argument is a usage error —
+// it must take the documented exit-2 class with a message naming the
+// requirement, not a runtime exit-1 from deep inside the sitemap client.
+func TestMap_BadSiteExit2(t *testing.T) {
+	testEnv(t, "cache.db")
+	for _, site := range []string{"file:///tmp/x.html", "exampl.com", "htp://x"} {
+		err := runMap(t.Context(), site, mapOptions{})
+		if codeOf(err) != 2 {
+			t.Errorf("map %q exit = %d, want 2 (err=%v)", site, codeOf(err), err)
+		}
+	}
+}
