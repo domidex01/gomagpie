@@ -416,3 +416,26 @@ func TestScrapeURL_QualityError(t *testing.T) {
 		t.Fatalf("403 challenge via MCP: want tool error, got %+v", res.StructuredContent)
 	}
 }
+
+// TestScrapeURL_BadRender pins MCP/CLI validation parity: the tool path
+// never re-implements the option switches, so agents see scrape's exact
+// strings ( KD-2: this text is API surface).
+func TestScrapeURL_BadRender(t *testing.T) {
+	fx := &fakeExtractor{script: map[string]any{"title": "Widget"}}
+	db := openMCPDB(t)
+	cs := dialInMemory(t, testMCPServer(t, db, fx), nil)
+	res := callTool(t, cs, "scrape_url", map[string]any{"url": "https://example.com", "render": "nope"}, "")
+	if !res.IsError {
+		t.Fatal("bad render via MCP: IsError = false, want tool error")
+	}
+	raw, _ := json.Marshal(res.Content) //nolint:errcheck // Content is server-built; marshal cannot fail
+	var contents []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &contents); err != nil {
+		t.Fatalf("decode content: %v", err)
+	}
+	if len(contents) == 0 || contents[0].Text != `mcp: scrape_url: scrape: render "nope" must be auto|static|browser` {
+		t.Errorf("tool error = %s, want scrape's exact validation string", raw)
+	}
+}

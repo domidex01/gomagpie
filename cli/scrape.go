@@ -8,7 +8,6 @@ import (
 	"gomagpie/config"
 	"gomagpie/extract"
 	"gomagpie/scrape"
-	"gomagpie/vertical"
 
 	"github.com/spf13/cobra"
 )
@@ -89,29 +88,13 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 	if cfg.Format != "json" && cfg.Format != "jsonl" {
 		return fail(2, "format %q must be json|jsonl", cfg.Format)
 	}
-	if cfg.Render == "" {
-		cfg.Render = "auto"
-	}
-	switch cfg.Render {
-	case "auto", "static", "browser":
-	default:
-		return fail(2, "render %q must be auto|static|browser", cfg.Render)
-	}
-	if o.PageFormat != "" {
-		switch o.PageFormat {
-		case "markdown", "llm", "text", "json":
-		default:
-			return fail(2, "page-format %q must be markdown|llm|text|json", o.PageFormat)
-		}
-	}
-	if err := checkBrowser("scrape", o.Browser); err != nil {
+	// One validation site (scrape owns the switches): render, page format,
+	// browser fingerprint, vertical name — all pre-I/O, exit 2 via exitFor.
+	if err := scrape.ValidateOptions(scrape.Options{
+		Render: cfg.Render, PageFormat: o.PageFormat,
+		Browser: o.Browser, Vertical: o.Vertical,
+	}); err != nil {
 		return err
-	}
-	// Unknown vertical names fail pre-I/O: no fetch, no DB touched beyond open.
-	if o.Vertical != "" && o.Vertical != "auto" {
-		if _, ok := vertical.Lookup(o.Vertical); !ok {
-			return fail(2, "vertical %q unknown (see `magpie vertical --list`)", o.Vertical)
-		}
 	}
 
 	db, err := openCmdDB(cfg)
@@ -146,7 +129,7 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		Vertical: o.Vertical,
 	})
 	if err != nil {
-		return scrapeExit(err, rawURL, provider)
+		return keyHint(err) // exitFor owns the code mapping
 	}
 	if res.Vertical != "" {
 		vdoc, merr := verticalDoc(res)
@@ -199,15 +182,6 @@ func applyScrapeFlags(cfg *config.Config, o scrapeOptions) {
 		f.NoCache, f.NoCacheChanged = true, true
 	}
 	cfg.ApplyFlags(f)
-}
-
-// qualityMessage renders the typed issue when available, falling back to
-// the raw URL when the wrap chain carries no QualityError.
-func qualityMessage(err error, rawURL string) string {
-	if issue := clean.QualityIssue(err); issue != clean.IssueNone {
-		return "quality blocked (" + string(issue) + ") for " + rawURL
-	}
-	return "quality blocked for " + rawURL
 }
 
 func markdownDoc(r scrape.Result) (string, error) {

@@ -70,7 +70,7 @@ func runSummarize(ctx context.Context, rawURL string, o summarizeOptions) error 
 		MaxSentences: o.MaxSentences, Provider: provider, Model: model, MaxCost: cfg.MaxCost,
 	})
 	if err != nil {
-		return scrapeExit(err, rawURL, provider)
+		return keyHint(err)
 	}
 	doc, merr := marshalOut(map[string]any{
 		"url": res.URL, "final_url": res.FinalURL, "title": res.Title,

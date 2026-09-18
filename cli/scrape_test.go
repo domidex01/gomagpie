@@ -145,10 +145,7 @@ func codeOf(err error) int {
 	if err == nil {
 		return 0
 	}
-	if ce, ok := err.(*cmdError); ok {
-		return ce.code
-	}
-	return 1
+	return exitCode(err) // tests assert the same mapping the process edge uses
 }
 
 func TestScrapeNoSchema(t *testing.T) {

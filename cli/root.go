@@ -1,10 +1,16 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
+	"gomagpie/clean"
 	"gomagpie/config"
+	"gomagpie/crawl"
+	"gomagpie/fetch"
+	"gomagpie/scrape"
+	"gomagpie/vertical"
 
 	"github.com/spf13/cobra"
 )
@@ -68,13 +74,52 @@ func resolveConfig() (config.Config, error) {
 	return cfg, nil
 }
 
-func exitFor(err error) int {
+// exitCode maps an error to the process exit code — pure, no printing
+// (tests assert the map directly). It is the ONLY place exit codes for
+// typed pipeline errors are decided (validation → 2, missing key → 7,
+// quality → 8, cost ceiling → 6, robots → 5, scope/SSRF/vertical-
+// mismatch → 2); command handlers return the error (with context
+// attached) and never re-map. Command-specific usage errors keep their
+// local fail(code, …) — each is single-site, not a shared mapping.
+func exitCode(err error) int {
 	if ce, ok := err.(*cmdError); ok {
-		fmt.Fprintln(os.Stderr, ce.msg)
 		return ce.code
 	}
-	fmt.Fprintln(os.Stderr, "error:", err)
-	return 1
+	code := 1
+	var oe *scrape.OptionsError
+	switch {
+	case errors.As(err, &oe):
+		code = 2
+	case errors.Is(err, scrape.ErrMissingKey):
+		code = 7
+	case errors.Is(err, crawl.ErrCostCeiling):
+		code = 6
+	case errors.Is(err, clean.ErrQuality):
+		code = 8
+	case errors.Is(err, crawl.ErrRobotsBlocked):
+		code = 5
+	case errors.Is(err, vertical.ErrURLMismatch),
+		errors.Is(err, fetch.ErrPrivateAddress),
+		errors.Is(err, crawl.ErrBadScope):
+		code = 2
+	}
+	return code
+}
+
+// exitFor prints err the way the process edge does and returns exitCode's
+// mapping. Only Execute calls it; tests use exitCode to stay silent.
+func exitFor(err error) int {
+	code := exitCode(err)
+	if ce, ok := err.(*cmdError); ok {
+		fmt.Fprintln(os.Stderr, ce.msg)
+		return code
+	}
+	if code == 1 {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Fprintln(os.Stderr, err)
+	return code
 }
 
 type cmdError struct {

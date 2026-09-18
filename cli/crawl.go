@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -11,8 +10,8 @@ import (
 
 	"gomagpie/crawl"
 	"gomagpie/extract"
-	"gomagpie/fetch"
 	pluginExec "gomagpie/plugin/exec"
+	"gomagpie/scrape"
 
 	"github.com/spf13/cobra"
 )
@@ -121,7 +120,7 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	}
 	key := cfg.APIKey(provider)
 	if key == "" && needsAPIKey(provider) {
-		return fail(7, "missing API key for %s: set via --api-key flag, GOMAGPIE_* env, or `magpie config set-key`", provider)
+		return missingKeyErr(provider)
 	}
 	sch, err := extract.LoadSchema(cfg.Schema)
 	if err != nil {
@@ -131,7 +130,7 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		cfg.ExporterCmd = o.ExporterCmd
 	}
 	// Pre-I/O: an unknown fingerprint must exit 2, never burn a fetch.
-	if err := checkBrowser("crawl", o.Browser); err != nil {
+	if err := scrape.ValidateOptions(scrape.Options{Browser: o.Browser}); err != nil {
 		return err
 	}
 	if o.IgnoreRobots {
@@ -231,16 +230,8 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		}
 	}
 	if err != nil {
-		switch {
-		case errors.Is(err, crawl.ErrRobotsBlocked):
-			return fail(5, "crawl: %v", err)
-		case errors.Is(err, crawl.ErrCostCeiling):
-			return fail(6, "crawl: %v", err)
-		case errors.Is(err, crawl.ErrBadScope):
-			return fail(2, "%v", err)
-		case errors.Is(err, fetch.ErrPrivateAddress):
-			return fail(2, "crawl: %v", err)
-		}
+		// Typed crawl errors map in exitFor: robots → 5, ceiling → 6,
+		// scope/SSRF → 2.
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "crawl: run_id=%s pages_ok=%d pages_err=%d records=%d\n", res.RunID, res.PagesOK, res.PagesErr, res.Records)
