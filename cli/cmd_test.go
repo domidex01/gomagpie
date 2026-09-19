@@ -753,7 +753,7 @@ func TestCrawlFlags_HelpText(t *testing.T) {
 	if crawlCmd == nil {
 		t.Fatal("no crawl command on the root")
 	}
-	for _, flag := range []string{"path-prefix", "include", "exclude", "allow-subdomains", "no-sitemap"} {
+	for _, flag := range []string{"path-prefix", "include", "exclude", "allow-subdomains", "no-sitemap", "corpus"} {
 		if crawlCmd.Flags().Lookup(flag) == nil {
 			t.Errorf("crawl is missing --%s", flag)
 		}
@@ -987,4 +987,61 @@ func TestSearchCmd_Validation(t *testing.T) {
 		}
 	}
 	resetGlobals()
+}
+
+// --- Phase I: corpus mode (schema-less RAG ingestion) ---
+
+func TestCrawl_CorpusCLI(t *testing.T) {
+	testEnv(t, "cache.db") // keyless: no fakeLLM, no MAGPIE_* key env, no --schema
+	seed := writeFileSite(t, 3)
+	out := filepath.Join(t.TempDir(), "c.jsonl")
+	err := runCrawl(t.Context(), seed, crawlCLIOptions{
+		Corpus: true, Format: "jsonl", Out: out,
+		MaxPages: 10, MaxDepth: 3, Concurrency: 4, SameHost: true, Rate: 1000,
+	})
+	if err != nil {
+		t.Fatalf("crawl: %v", err)
+	}
+	raw := mustRead(t, out)
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("jsonl lines = %d, want 4 (index + 3 pages)", len(lines))
+	}
+	for i, ln := range lines {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(ln), &rec); err != nil {
+			t.Fatalf("line %d not JSON: %v", i, err)
+		}
+		if len(rec) != 4 {
+			t.Errorf("line %d has %d keys, want exactly url,title,depth,markdown", i, len(rec))
+		}
+		for _, k := range []string{"url", "title", "depth", "markdown"} {
+			if _, ok := rec[k]; !ok {
+				t.Errorf("line %d missing key %q", i, k)
+			}
+		}
+		if md, _ := rec["markdown"].(string); strings.TrimSpace(md) == "" {
+			t.Errorf("line %d has empty markdown", i)
+		}
+	}
+}
+
+func TestCrawl_CorpusCLIViolations(t *testing.T) {
+	testEnv(t, "cache.db")
+	seed := writeFileSite(t, 1)
+	rows := []crawlCLIOptions{
+		{Corpus: true, Schema: priceSchema(t), Format: "jsonl"}, // corpus + schema
+		{Corpus: true, Format: "csv"},
+		{Corpus: true, Format: "json"},
+		{Corpus: true, Format: "sqlite"},
+	}
+	for i, o := range rows {
+		err := runCrawl(t.Context(), seed, o)
+		if codeOf(err) != 2 {
+			t.Errorf("row %d exit = %d (%v), want 2", i, codeOf(err), err)
+		}
+		if !strings.Contains(err.Error(), "corpus") {
+			t.Errorf("row %d error %v does not name corpus", i, err)
+		}
+	}
 }

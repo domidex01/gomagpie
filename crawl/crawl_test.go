@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"magpie/core"
 	"magpie/extract"
 	"magpie/fetch"
 	"magpie/selector"
@@ -963,6 +964,345 @@ func TestCrawl_SeedExpansionWarnProceed(t *testing.T) {
 	}
 }
 
+// --- Phase I: corpus mode (schema-less RAG ingestion) ---
+
+// corpusThinPage fails the quality gate when served non-2xx: the body scores
+// far below ThinPageWords = 200 (clean/quality.go), so not-found-thin fires
+// and the page lands in PagesErr — never emitted as a corpus record. Crawl
+// enforces quality via qualityErr on non-2xx only (crawl.go), same as
+// extracted mode.
+const corpusThinPage = `<html><head><title>Thin</title></head><body><p>Very short page.</p></body></html>`
+
+func TestCrawl_CorpusJSONL(t *testing.T) {
+	pages := map[string]string{
+		"/":  itemPage("/a"),
+		"/a": itemPage("/b"),
+		"/b": itemPage(),
+	}
+	o := newSiteOrigin(t, pages, "")
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}} // wired to PROVE zero calls
+	var mu sync.Mutex
+	var tee []map[string]any
+	out := filepath.Join(t.TempDir(), "c.jsonl")
+	res, err := Run(context.Background(), Options{
+		SeedURL: o.srv.URL + "/", Corpus: true,
+		Schema: nil, Extractor: fx, // corpus: both legal now
+		MaxPages: 10, MaxDepth: 3, SameHost: true,
+		FetchWorkers: 4, Rate: 1000, Format: "", Out: out, // "" defaults to jsonl
+		DB: db,
+		OnRecord: func(r map[string]any) {
+			mu.Lock()
+			defer mu.Unlock()
+			tee = append(tee, r)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.PagesOK != 3 || res.Records != 3 || res.PagesErr != 0 {
+		t.Fatalf("res = ok:%d rec:%d err:%d, want 3/3/0", res.PagesOK, res.Records, res.PagesErr)
+	}
+	if got := fx.total(); got != 0 {
+		t.Errorf("extractor calls = %d, want 0 (corpus is keyless)", got)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("jsonl lines = %d, want 3", len(lines))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(tee) != 3 {
+		t.Fatalf("tee records = %d, want 3", len(tee))
+	}
+	wantDepth := map[string]float64{
+		o.srv.URL + "/":  0,
+		o.srv.URL + "/a": 1,
+		o.srv.URL + "/b": 2,
+	}
+	for i, ln := range lines {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(ln), &rec); err != nil {
+			t.Fatalf("line %d not JSON: %v", i, err)
+		}
+		if len(rec) != 4 {
+			t.Errorf("line %d has %d keys, want exactly url,title,depth,markdown: %v", i, len(rec), rec)
+		}
+		for _, k := range []string{"url", "title", "depth", "markdown"} {
+			if _, ok := rec[k]; !ok {
+				t.Errorf("line %d missing key %q", i, k)
+			}
+		}
+		md, _ := rec["markdown"].(string)
+		if !strings.Contains(md, "fine product") {
+			t.Errorf("line %d markdown missing main content", i)
+		}
+		if strings.Contains(md, "<a href") || strings.Contains(md, "<nav") {
+			t.Errorf("line %d markdown contains boilerplate HTML", i)
+		}
+		if rec["title"] != "Widget - Buy" {
+			t.Errorf("line %d title = %v, want Widget - Buy", i, rec["title"])
+		}
+		u, _ := rec["url"].(string)
+		d, ok := wantDepth[u]
+		if !ok {
+			t.Errorf("line %d unexpected url %q", i, u)
+		} else if rec["depth"] != d {
+			t.Errorf("line %d depth = %v for %v, want %v", i, rec["depth"], u, d)
+		}
+		delete(wantDepth, u)
+		// Tee parity: OnRecord must hand the writer's exact record shape.
+		teeJSON, merr := json.Marshal(tee[i])
+		if merr != nil {
+			t.Fatalf("marshal tee: %v", merr)
+		}
+		if string(teeJSON) != strings.TrimSpace(ln) {
+			t.Errorf("line %d: OnRecord tee drifted from writer record:\n tee: %s\nfile: %s", i, teeJSON, ln)
+		}
+	}
+	if len(wantDepth) != 0 {
+		t.Errorf("urls missing from output: %v", wantDepth)
+	}
+}
+
+func TestCrawl_CorpusQualityError(t *testing.T) {
+	denyBody, err := os.ReadFile("../testdata/quality/challenge-akamai.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/deny":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write(denyBody) //nolint:errcheck // httptest local; short write unactionable
+		case "/thin":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(corpusThinPage)) //nolint:errcheck // httptest local; short write unactionable
+		default:
+			_, _ = w.Write([]byte(itemPage("/thin", "/deny"))) //nolint:errcheck // httptest local; short write unactionable
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+	out := filepath.Join(t.TempDir(), "c.jsonl")
+	res, err := Run(context.Background(), Options{
+		SeedURL: srv.URL + "/", Corpus: true, Schema: nil, Extractor: fx,
+		MaxPages: 10, MaxDepth: 1, SameHost: true,
+		FetchWorkers: 2, Rate: 1000, Format: "jsonl", Out: out,
+		DB: db,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.PagesErr < 2 {
+		t.Errorf("pages_err = %d, want ≥2 (thin + challenge)", res.PagesErr)
+	}
+	if res.PagesOK != 1 {
+		t.Errorf("pages_ok = %d, want 1 (seed only)", res.PagesOK)
+	}
+	raw, rerr := os.ReadFile(out)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != res.PagesOK {
+		t.Errorf("jsonl lines = %d, want pages_ok = %d", len(lines), res.PagesOK)
+	}
+	for i, ln := range lines {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(ln), &rec); err != nil {
+			t.Fatalf("line %d not JSON: %v", i, err)
+		}
+		if md, _ := rec["markdown"].(string); strings.TrimSpace(md) == "" {
+			t.Errorf("line %d has empty markdown (quality pages must be errors, never empty records)", i)
+		}
+	}
+	if got := fx.total(); got != 0 {
+		t.Errorf("extractor calls = %d, want 0 (corpus is keyless)", got)
+	}
+}
+
+func TestCrawl_CorpusValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		opts    Options
+		wantErr string // "" = must succeed
+	}{
+		{"corpus jsonl", Options{DB: openCrawlDB(t), Corpus: true, Format: "jsonl"}, ""},
+		{"corpus default format", Options{DB: openCrawlDB(t), Corpus: true, Format: ""}, ""},
+		{"corpus csv", Options{DB: openCrawlDB(t), Corpus: true, Format: "csv"}, "corpus mode requires --format jsonl"},
+		{"corpus json", Options{DB: openCrawlDB(t), Corpus: true, Format: "json"}, "corpus mode requires --format jsonl"},
+		{"corpus sqlite", Options{DB: openCrawlDB(t), Corpus: true, Format: "sqlite"}, "corpus mode requires --format jsonl"},
+		{"extracted nil schema", Options{DB: openCrawlDB(t)}, "crawl: nil schema"},
+		{"extracted nil extractor", Options{DB: openCrawlDB(t), Schema: mustTestSchema(t)}, "crawl: nil extractor"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := newCrawlContext(tc.opts)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("newCrawlContext: %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestWriter_RecordShapes(t *testing.T) {
+	dir := t.TempDir()
+
+	// Corpus envelope: exactly {url,title,depth,markdown}.
+	corpusOut := filepath.Join(dir, "c.jsonl")
+	wc, err := newWriter(corpusOut, "jsonl", nil, nil, "", true)
+	if err != nil {
+		t.Fatalf("newWriter corpus: %v", err)
+	}
+	err = wc.write(core.PageResult{
+		Task: core.FetchTask{URL: "http://ex.com/a", Depth: 2}, Title: "T", Text: "body",
+	})
+	if err != nil {
+		t.Fatalf("corpus write: %v", err)
+	}
+	if err := wc.close(); err != nil {
+		t.Fatalf("corpus close: %v", err)
+	}
+	raw, err := os.ReadFile(corpusOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatalf("corpus line not JSON: %v", err)
+	}
+	if len(rec) != 4 {
+		t.Fatalf("corpus keys = %d (%v), want exactly url,title,depth,markdown", len(rec), rec)
+	}
+	if rec["url"] != "http://ex.com/a" || rec["title"] != "T" || rec["depth"] != float64(2) || rec["markdown"] != "body" {
+		t.Errorf("corpus record = %v, want url/title/depth=2/markdown", rec)
+	}
+
+	// Extracted envelope: exactly {url,extracted} — frozen shape.
+	exOut := filepath.Join(dir, "e.jsonl")
+	we, err := newWriter(exOut, "jsonl", nil, nil, "", false)
+	if err != nil {
+		t.Fatalf("newWriter extracted: %v", err)
+	}
+	err = we.write(core.PageResult{
+		Task: core.FetchTask{URL: "http://ex.com/b"}, Record: map[string]any{"price": 12.99},
+	})
+	if err != nil {
+		t.Fatalf("extracted write: %v", err)
+	}
+	if err := we.close(); err != nil {
+		t.Fatalf("extracted close: %v", err)
+	}
+	raw, err = os.ReadFile(exOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var erec map[string]any
+	if err := json.Unmarshal(raw, &erec); err != nil {
+		t.Fatalf("extracted line not JSON: %v", err)
+	}
+	if len(erec) != 2 {
+		t.Fatalf("extracted keys = %d (%v), want exactly url,extracted", len(erec), erec)
+	}
+	ex, ok := erec["extracted"].(map[string]any)
+	if !ok || len(ex) != 1 || ex["price"] != 12.99 {
+		t.Errorf("extracted record = %v, want extracted.price = 12.99", erec)
+	}
+}
+
+func TestCrawl_CorpusResume(t *testing.T) {
+	o := newSiteOrigin(t, sevenPages(), "")
+	db := openCrawlDB(t)
+	partOut := filepath.Join(t.TempDir(), "part.jsonl")
+	part, err := Run(context.Background(), Options{
+		SeedURL: o.srv.URL + "/0", Corpus: true, Schema: nil, Extractor: nil,
+		MaxPages: 3, MaxDepth: 10, SameHost: true,
+		FetchWorkers: 2, Rate: 1000, Format: "jsonl", Out: partOut,
+		DB: db,
+	})
+	if err != nil {
+		t.Fatalf("partial run: %v", err)
+	}
+	if part.PagesOK != 3 {
+		t.Fatalf("partial pages_ok = %d, want 3", part.PagesOK)
+	}
+	// The SIGKILL path: claim 2 more and strand them (inflight never marked).
+	stranded, err := db.Claim(part.RunID, 2)
+	if err != nil || len(stranded) != 2 {
+		t.Fatalf("strand claim = %d,%v want 2", len(stranded), err)
+	}
+
+	resOut := filepath.Join(t.TempDir(), "res.jsonl")
+	res, err := Run(context.Background(), Options{
+		SeedURL: o.srv.URL + "/0", Corpus: true, Schema: nil, Extractor: nil,
+		MaxPages: 100, MaxDepth: 10, SameHost: true,
+		FetchWorkers: 4, Rate: 1000, Format: "jsonl", Out: resOut,
+		DB: db, Resume: true, ResumeID: part.RunID,
+	})
+	if err != nil {
+		t.Fatalf("resume run: %v", err)
+	}
+	if res.RunID != part.RunID {
+		t.Errorf("resume run id changed: %q vs %q", res.RunID, part.RunID)
+	}
+	fileURLs := func(path string) map[string]int {
+		t.Helper()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		urls := map[string]int{}
+		for _, ln := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			var rec map[string]any
+			if err := json.Unmarshal([]byte(ln), &rec); err != nil {
+				t.Fatalf("line not JSON: %v", err)
+			}
+			u, _ := rec["url"].(string)
+			urls[u]++
+		}
+		return urls
+	}
+	partURLs := fileURLs(partOut)
+	resURLs := fileURLs(resOut)
+	if len(partURLs) != 3 || len(resURLs) != 4 {
+		t.Errorf("unique urls = %d partial + %d resumed, want 3 + 4", len(partURLs), len(resURLs))
+	}
+	all := map[string]bool{}
+	for u := range partURLs {
+		all[u] = true
+	}
+	for u := range resURLs {
+		if partURLs[u] > 0 {
+			t.Errorf("url %s recorded in both runs (duplicate)", u)
+		}
+		all[u] = true
+	}
+	if len(all) != 7 {
+		t.Errorf("union of urls = %d, want 7", len(all))
+	}
+	// Done pages never re-fetched: every page fetched exactly once.
+	for _, p := range []string{"/0", "/1", "/2", "/3", "/4", "/5", "/6"} {
+		if n := o.count(p); n != 1 {
+			t.Errorf("origin hits %s = %d, want exactly 1", p, n)
+		}
+	}
+}
+
 // TestAutoThrottle_WiredInsideRetry — the PR#11 dead-wiring tripwire.
 // backoff.go consumes each page's 429 (Retry-After: 0 → immediate retry),
 // so the ONLY observable difference between Report wired inside the do
@@ -1015,5 +1355,80 @@ func TestAutoThrottle_WiredInsideRetry(t *testing.T) {
 	elapsed := time.Since(start)
 	if elapsed < 3*time.Second {
 		t.Errorf("run took %v; AutoThrottle Report looks dead-wired (want ≥3s: the 429-reported delay must block later pages)", elapsed)
+	}
+}
+
+// TestCrawl_CorpusSitemapOnly — Phase I × Phase J interaction: the
+// sitemap-only frontier feeds the corpus writer. Seed not listed → never
+// fetched; links not followed; every fetched page becomes a corpus record
+// (zero LLM — the fake extractor stays at 0).
+func TestCrawl_CorpusSitemapOnly(t *testing.T) {
+	o := newSitemapOnlyOrigin(t, allowAllRobots,
+		map[string]string{"/a": itemPage(), "/b": itemPage(), "/c": itemPage()},
+		"/a", "/b", "/c")
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+	var mu sync.Mutex
+	var recs []map[string]any
+	res, err := Run(context.Background(), Options{
+		SeedURL: o.srv.URL + "/", Corpus: true, SitemapOnly: true,
+		Schema: nil, Extractor: fx,
+		MaxPages: 10, MaxDepth: 0, SameHost: true,
+		FetchWorkers: 2, Rate: 1000, Format: "jsonl", Out: filepath.Join(t.TempDir(), "c.jsonl"),
+		DB: db,
+		OnRecord: func(r map[string]any) {
+			mu.Lock()
+			defer mu.Unlock()
+			recs = append(recs, r)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.PagesOK != 3 || res.Records != 3 || res.PagesErr != 0 {
+		t.Fatalf("res = ok:%d rec:%d err:%d, want 3/3/0", res.PagesOK, res.Records, res.PagesErr)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(recs) != 3 {
+		t.Fatalf("records = %d, want 3", len(recs))
+	}
+	for _, r := range recs {
+		if _, ok := r["markdown"]; !ok {
+			t.Errorf("record %v missing markdown (corpus envelope)", r)
+		}
+		if _, ok := r["extracted"]; ok {
+			t.Errorf("record %v carries extracted key (wrong envelope for corpus)", r)
+		}
+	}
+	if n := o.count("/"); n != 0 {
+		t.Errorf("seed fetched %d times; unlisted seed must not enqueue", n)
+	}
+	if got := fx.total(); got != 0 {
+		t.Errorf("extractor calls = %d, want 0", got)
+	}
+}
+
+// TestCrawl_CorpusAutoThrottle — Phase I × Phase J: AutoThrottle's Report
+// wiring lives in fetchPage, which corpus does not skip — a throttled
+// corpus run completes normally (the ×2/decay math itself is pinned by
+// TestHostLimiters_Auto*; this row proves the flags co-exist end to end).
+func TestCrawl_CorpusAutoThrottle(t *testing.T) {
+	pages := map[string]string{"/": itemPage("/a"), "/a": itemPage("/b"), "/b": itemPage()}
+	o := newSiteOrigin(t, pages, "")
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+	res, err := Run(context.Background(), Options{
+		SeedURL: o.srv.URL + "/", Corpus: true, AutoThrottle: true,
+		Schema: nil, Extractor: fx,
+		MaxPages: 3, MaxDepth: 3, SameHost: true,
+		FetchWorkers: 4, Rate: 1000, Format: "jsonl", Out: filepath.Join(t.TempDir(), "c.jsonl"),
+		DB: db,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.PagesOK != 3 || res.Records != 3 || res.PagesErr != 0 {
+		t.Fatalf("res = ok:%d rec:%d err:%d, want 3/3/0", res.PagesOK, res.Records, res.PagesErr)
 	}
 }

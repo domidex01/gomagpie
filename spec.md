@@ -616,7 +616,9 @@ magpie
 │     --max-cost <usd>
 ├── crawl <url>               BFS crawl + extract
 │     --max-pages N (100)  --max-depth N (3)  --same-host (true)
-│     --schema <file>  --concurrency N  --rate <per-host-rps>
+│     --schema <file>  (required unless --corpus)  --concurrency N  --rate <per-host-rps>
+│     --corpus                 Schema-less corpus mode: {url,title,depth,markdown} JSONL per page,
+│                              zero LLM calls (jsonl only; mutually exclusive with --schema)
 │     --resume <run_id>       Resume a checkpointed crawl
 │     --format jsonl|json|csv|sqlite
 ├── extract                   Extract from stdin/file (no fetch)
@@ -642,6 +644,8 @@ magpie
 - **JSON**: single array (single scrape).
 - **CSV**: flat schemas only; nested fields error with a clear message.
 - **SQLite**: write records into a `records` table in the run DB.
+- **Corpus** (`crawl --corpus`): schema-less JSONL `{url,title,depth,markdown}` per page —
+  cleaned main-content text for RAG ingestion; zero LLM calls (keyless); jsonl only.
 
 ### 10.2 Exit codes
 - `0` success.

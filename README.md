@@ -315,12 +315,14 @@ magpie crawl https://example.com/docs --schema page.yaml --path-prefix /docs \
   --include '**/docs/**' --exclude '**/api/**' --max-pages 50 --max-depth 3
 magpie crawl https://example.com --schema page.yaml --exporter-cmd ./embed.sh
 magpie crawl https://example.com --schema page.yaml --resume <run_id>
+magpie crawl https://docs.example.com --corpus --max-pages 500 --out corpus.jsonl
 magpie crawl --status <run_id>
 ```
 
 | Flag | Values / default | Action |
 | :-- | :-- | :-- |
-| `--schema` | yaml/json file (**required**) | Schema applied to every page |
+| `--schema` | yaml/json file (**required unless `--corpus`**) | Schema applied to every page |
+| `--corpus` | flag | Schema-less corpus mode: one `{url,title,depth,markdown}` JSONL record per page with cleaned main-content text; zero LLM calls, no API key (jsonl only; mutually exclusive with `--schema`) |
 | `--format` | `jsonl\|json\|csv\|sqlite` (default jsonl) | Output shape |
 | `--out` | path (default stdout) | Write records to a file |
 | `--max-pages` | int (default 100) | Max pages to claim/fetch |

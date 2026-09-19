@@ -45,6 +45,7 @@ func ValidateSitemapOnly(sitemapOnly, noSitemap bool) error {
 type Options struct {
 	SeedURL      string
 	Schema       *extract.Schema
+	Corpus       bool // schema-less corpus mode: emit {url,title,depth,markdown} per page; jsonl only; zero LLM calls
 	MaxPages     int
 	MaxDepth     int
 	SameHost     bool
@@ -149,17 +150,30 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	return cc.runPipeline(ctx)
 }
 
+// ValidateCorpus rejects an impossible corpus/format pair. Shared by the
+// CLI edge (exit 2) and newCrawlContext (Options error) so the rule can't
+// drift between them.
+func ValidateCorpus(corpus bool, format string) error {
+	if corpus && format != "" && format != "jsonl" {
+		return fmt.Errorf("crawl: corpus mode requires --format jsonl")
+	}
+	return nil
+}
+
 // newCrawlContext validates options and derives the run-wide defaults:
 // maxPages/maxDepth/format, compiled scope, schema hash, and run ID.
 func newCrawlContext(opts Options) (*crawlContext, error) {
 	if opts.DB == nil {
 		return nil, fmt.Errorf("crawl: nil DB")
 	}
-	if opts.Schema == nil {
+	if opts.Schema == nil && !opts.Corpus {
 		return nil, fmt.Errorf("crawl: nil schema")
 	}
-	if opts.Extractor == nil {
+	if opts.Extractor == nil && !opts.Corpus {
 		return nil, fmt.Errorf("crawl: nil extractor")
+	}
+	if err := ValidateCorpus(opts.Corpus, opts.Format); err != nil {
+		return nil, err
 	}
 	cc := &crawlContext{db: opts.DB, opts: opts}
 	cc.maxPages = opts.MaxPages
@@ -178,8 +192,13 @@ func newCrawlContext(opts Options) (*crawlContext, error) {
 	if cc.format == "" {
 		cc.format = "jsonl"
 	}
-	cc.schemaHash = selector.SchemaHash(opts.Schema)
-	cc.required = requiredFields(opts.Schema)
+	// Corpus mode has no schema: the selector-cache reads that would consult
+	// the hash are skipped, so the hash is never used. SchemaHash would panic
+	// on nil (sch.Raw), so both derivations stay schema-guarded.
+	if opts.Schema != nil {
+		cc.schemaHash = selector.SchemaHash(opts.Schema)
+		cc.required = requiredFields(opts.Schema)
+	}
 	// Compile the frontier scope once; a bad glob fails before any I/O.
 	scope, err := CompileScope(opts.SameHost, opts.AllowSubdomains, opts.PathPrefix, opts.Include, opts.Exclude)
 	if err != nil {
@@ -350,7 +369,7 @@ func (c *crawlContext) runPipeline(ctx context.Context) (Result, error) {
 	c.gate = core.NewBrowserGate(2)
 	c.domains = map[string]*domainState{}
 
-	w, err := newWriter(c.opts.Out, c.format, c.opts.Schema, c.db, c.runID)
+	w, err := newWriter(c.opts.Out, c.format, c.opts.Schema, c.db, c.runID, c.opts.Corpus)
 	if err != nil {
 		return Result{}, err
 	}
@@ -374,7 +393,7 @@ func (c *crawlContext) runPipeline(ctx context.Context) (Result, error) {
 			} else if merr := c.db.MarkDone(c.runID, hashTask(r.Task)); merr != nil {
 				fmt.Fprintf(os.Stderr, "warning: mark done: %v\n", merr)
 			} else if c.opts.OnRecord != nil {
-				c.opts.OnRecord(jsonRecord(r))
+				c.opts.OnRecord(w.record(r))
 			}
 		}
 		c.outstanding.Add(-1)
@@ -538,8 +557,10 @@ func (c *crawlContext) cleanPage(ctx context.Context, page core.FetchedPage) (co
 	// ponytail: one SQLite point read per page to decide (ceiling =
 	// negligible WAL read on the single conn).
 	needLLM := true
-	if doc, ok, err := c.db.GetSelectors(domainOf(finalURL), c.schemaHash); err == nil && ok {
-		needLLM = hasNonCacheable(doc, c.opts.Schema)
+	if !c.opts.Corpus {
+		if doc, ok, err := c.db.GetSelectors(domainOf(finalURL), c.schemaHash); err == nil && ok {
+			needLLM = hasNonCacheable(doc, c.opts.Schema)
+		}
 	}
 	if !needLLM {
 		return core.Cleaned{Task: page.Task, Resp: page.Resp,
@@ -591,6 +612,11 @@ func (c *crawlContext) extractOne(ctx context.Context, markdown string, sidecar 
 func (c *crawlContext) extractPage(ctx context.Context, cl core.Cleaned) (core.PageResult, error) {
 	if cl.Err != nil {
 		return core.PageResult{Task: cl.Task, Err: cl.Err}, nil
+	}
+	// Corpus mode: the cleaned markdown IS the record — no selectors, no
+	// heal, no domain state.
+	if c.opts.Corpus {
+		return core.PageResult{Task: cl.Task, Err: cl.Err, Title: cl.Page.Title, Text: cl.Page.Markdown}, nil
 	}
 	finalURL := cl.Page.FinalURL
 	if finalURL == "" && cl.Resp != nil {
