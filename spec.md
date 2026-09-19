@@ -759,6 +759,65 @@ magpie cache inspect --domain amazon.fr
   MCP selection covers the use case honestly. `crawl --status <run_id>`
   is CLI parity for the MCP poll (unknown id exits 4, handler-local).
 
+### 10.6 Competitive-parity delta (Phase J)
+
+Five features closing the Scrapling comparison gaps, all additive (new flags,
+additive-omitempty fields) except the hidden-text strip, which changes
+`clean.Clean` output for pages that contain hidden text:
+
+- **Prompt-injection stripping (default-on):** `clean.Clean` removes hidden
+  text at the choke point, before trafilatura/markdown conversion and before
+  any consumer (CLI, MCP, crawl, watch, corpus): inline styles matching
+  `display:none`, `visibility:hidden`, `font-size:0`, `opacity:0`
+  (lowercased-regexp match, whitespace/case tolerant), the `hidden`
+  attribute, and HTML comment nodes. `aria-hidden` is deliberately **out of
+  scope** (icon fonts / decorative markup make it low-precision), as are
+  computed styles (white-on-white, off-screen) — the strip is selector-level,
+  not a CSS engine. Pages with nothing hidden are returned **byte-identical**
+  (no re-serialization, so goldens and sidecars never drift). Escape hatch:
+  `--page-format raw` bypasses `Clean` entirely. The strip never fails a
+  page; `Classify` scores the stripped document by design (quality reflects
+  what consumers actually see).
+- **`--capture-xhr` (repeatable Go regexps; MCP `capture_xhr`):** returns the
+  XHR/fetch response bodies the page itself loaded (rod passive network
+  events — `GetResource` cannot see XHR; hijack would perturb the page).
+  Capture is restricted to XHR/Fetch resource types matching any pattern;
+  caps: **50 captures × 64 KiB body** — past a cap the data is truncated
+  (`"truncated":true`) or dropped, never an error; a CDP-evicted body
+  ("-32000") becomes metadata-only. Capture requires browser rendering
+  (`render=static` rejected at the exit-2 boundary, screenshot wording);
+  the bodies ride `FetchResponse.XHR` → CLI markdown envelope `xhr` array
+  (and the `page_format json` envelope when non-empty) → MCP `ScrapeOut.xhr`.
+  Crawl deliberately has no capture (v1: scrape-only — corpus records have
+  nowhere to put bodies).
+- **`--auto-throttle` (MCP `auto_throttle`):** adaptive per-host pacing, off
+  by default (Scrapy ships it off too — turning pacing into a moving target
+  unannounced would surprise existing users and goldens). `Report` fires per
+  attempt **inside** the `FetchWithRetry` closure (backoff.go consumes
+  intermediate 429/503s, so post-hoc wiring would see only final 200s and
+  the backoff would be dead code): delay ×2 on 429/5xx (cap **60s**), an
+  explicit `Retry-After` sets the delay directly (cap **5m**), 2xx decays ×¾
+  toward the floor — max(configured 1/rps, `Crawl-delay`). It paces FUTURE
+  requests to the host and is complementary to the same-request retry
+  taxonomy in `crawl/backoff.go`. **Static path only:** the rod-escalation
+  branch bypasses `Report` (rare path, acceptable).
+- **`crawl --sitemap-only` (MCP `sitemap_only`):** frontier = scope-filtered
+  sitemap URLs only — no seed enqueue (the seed is fetched only if the
+  sitemap lists it), no link-following. `maxPages` caps and scope filters
+  apply unchanged. Zero in-scope URLs → typed `ErrSitemapOnlyEmpty` →
+  **exit 3** (documented contract; never a silent 0-page success), and an
+  expansion error is fatal in this mode (there is no seed-only fallback).
+  `--sitemap-only --no-sitemap` is contradictory → **exit 2** at both edges
+  (one `crawl.ValidateSitemapOnly` predicate shared by CLI and MCP).
+- **`--cdp-url` / `MAGPIE_CDP_URL` (MCP `cdp_url`):** drive a remote or
+  already-running browser via CDP (`ws://`, `wss://`, or `http(s)://`; scheme
+  validated pre-I/O, exit 2; flag > env, the MAGPIE_PROXY pattern). With a
+  CDP endpoint set, `ensureBrowser` connects directly and the local launcher
+  never runs — **no local Chromium download/launch** (farms, containers,
+  browsers-as-a-service). Userinfo in the endpoint is redacted in errors
+  (never surfaced). Applies to scrape browser fetches and screenshots; scrape
+  accepts it even under `render=auto` (it only matters if a browser runs).
+
 ---
 
 ## 11. POLITENESS & SAFETY DEFAULTS

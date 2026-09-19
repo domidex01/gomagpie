@@ -58,6 +58,13 @@ func Clean(ctx context.Context, raw RawPage) (CleanedPage, error) {
 	if len(raw.Scope.Include)+len(raw.Scope.Exclude) > 0 {
 		htmlStr = ApplyScope(htmlStr, raw.Scope, func(string) {})
 	}
+	// Prompt-injection strip at the choke point: hidden text must not
+	// reach any consumer (markdown, CleanedPage.HTML, Classify). Runs
+	// after scoping (a scope-included subtree can still carry hidden
+	// vectors), before conversion. Untouched when nothing is hidden —
+	// clean pages stay byte-identical. Escape hatch: --page-format raw
+	// bypasses Clean entirely. Never fails the page.
+	htmlStr = StripHiddenHTML(htmlStr)
 	sidecar := HarvestSidecar(raw.HTML)
 	title := extractTitle(raw.HTML)
 	md, fellBack, err := trafilaturaToMarkdown(ctx, htmlStr, raw.FinalURL)

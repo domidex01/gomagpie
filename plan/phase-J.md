@@ -2,6 +2,8 @@
 
 **Duration:** 2 days (~16h)
 **Depends on:** master (Phase H merged, PR #13). Independent of Phase I (corpus mode) — either order.
+(Line anchors below verified on master @ ec49055; if Phase I merges first, re-anchor by function
+name — it shifts crawl.go line numbers.)
 **Blocks:** nothing hard; `--cdp-url` + XHR capture feed the future Wails-GUI and scraping-farm stories.
 **Risk Level:** MEDIUM — four of five features are purely additive (new flags, additive-omitempty
 fields); the one default-behavior change (hidden-text strip in `clean.Clean`) is contained by a
@@ -107,9 +109,11 @@ boundary, additive-omitempty output fields, one choke point per behavior):
    site (`crawl/crawl.go:423`) is untouched. Complementary, not duplicate, to `FetchWithRetry`
    (`crawl/backoff.go`), which retries the SAME request 4× with jittered backoff + Retry-After —
    AutoThrottle paces FUTURE requests to the host. Wire `Report` per attempt INSIDE the `do`
-   closure (`crawl.go:438`), never after `FetchWithRetry` returns: the retry loop consumes
+   closure (`crawl.go:429`), never after `FetchWithRetry` returns: the retry loop consumes
    intermediate 429/503s, so a post-hoc Report sees mostly final 200s → backoff is dead code
-   while unit tests stay green (the PR#11 dead-wiring trap).
+   while unit tests stay green (the PR#11 dead-wiring trap). The rod-escalation branch in
+   `fetchPage` bypasses the retry closure and never Reports — acceptable (rare path):
+   AutoThrottle adapts on the static path only; say so in spec §10.6 (J.6).
 4. **`--sitemap-only` reuses `seed()`'s expansion, adds a guard at link-enqueue.** Sitemap URLs
    enter at depth 0 alongside the seed (`frontier.Add(seeds, 0)` — depth is moot here since
    link-following is off), `scopeFilterExpansion` and `maxPages` caps apply unchanged; the only
@@ -152,8 +156,8 @@ if r.CDP != "" {
 ```
 
 Plumb `Options.CDP` (string) through `scrape.Options` → the browser-construction helper in
-`cli/scrape.go` (find the `fetch.NewRodFetcher()` call sites — `fetchBrowser` and the screenshot
-path) so every per-call fetcher carries it; env fallback `MAGPIE_CDP_URL` when flag empty.
+`scrape/scrape.go` (fetchBrowser :420, `fetch.NewRodFetcher()` :427 — plus the screenshot path
+beside it) so every per-call fetcher carries it; env fallback `MAGPIE_CDP_URL` when flag empty.
 Validate at the options boundary (`ValidateOptions`): non-empty must parse with scheme
 ws/wss/http(s) → else exit 2. MCP: `cdp_url` string param on `scrape_url` (mirror `lang`).
 Flag: `--cdp-url` on `scrape`.
@@ -182,7 +186,11 @@ inline `style` matches the vector set (`display\s*:\s*none`, `visibility\s*:\s*h
 `font-size\s*:\s*0`, `opacity\s*:\s*0(?:\.0+)?\s*(;|$)`) or that carry the `hidden` attribute,
 plus HTML comment nodes. Match on lowercased style text with a precompiled regexp — no CSS
 parsing, no new dep. Hook in `clean/clean.go` `Clean()` after the scope pass, before the
-trafilatura/markdown conversion. Never fail the page on a strip error: on any panic-adjacent
+trafilatura/markdown conversion. Integration note: `Clean` builds no goquery document today —
+StripHidden means doc → strip → re-serialize (goquery.OuterHtml) → the same htmlStr feeds
+trafilatura, `CleanedPage.HTML`, and `Classify`'s body; entity re-encoding may perturb md beyond
+the stripped nodes, so the spike inventories the full delta, not just hidden-vector survival.
+Never fail the page on a strip error: on any panic-adjacent
 weirdness, keep the original node (ponytail: selector-level strip, not a CSS engine — computed
 styles / white-on-white / off-screen positioning are the known ceiling; the upgrade path is a
 browser-computed-style pass, only if a real case appears).
@@ -190,7 +198,9 @@ browser-computed-style pass, only if a real case appears).
 **Tests:** `clean/injection_test.go` — each vector asserted absent from markdown, visible content
 asserted present; a legit `<span style="display:flex">` and an `aria-hidden` icon span asserted
 *surviving* (precision pins). Golden check: run `go test ./clean/...` against existing goldens —
-only fixtures that genuinely contain hidden text may change, and the spike doc names them.
+only fixtures that genuinely contain hidden text may change, and the spike doc names them
+(verified 2026-09-18: no current testdata/ fixture contains display:none/visibility:hidden —
+expect zero golden drift).
 Spike must also inventory second-order effects: StripHidden runs before conversion, so
 `Classify` scores the stripped HTML (clean.go:90) and `CleanedPage.HTML` is the stripped
 document — quality-shift and HTML-sidecar deltas belong in the spike doc and spec §10.6.
@@ -265,7 +275,7 @@ script `fetch()`es `/api/data` (serving `{"ok":true}`), assert one capture with 
 ### Task J.3 — AutoThrottle (3h)
 
 **Depends on:** nothing (touches `crawl/ratelimit.go`, lifts the Retry-After parse from
-`crawl/backoff.go:70`, and wires inside the `do` closure at `crawl/crawl.go:438`).
+`crawl/backoff.go:70`, and wires inside the `do` closure at `crawl/crawl.go:429`).
 
 Extend `HostLimiters` (no signature change to `NewHostLimiters` — add `SetAuto()` called once
 from `newCrawlContext` when `opts.AutoThrottle`):
@@ -286,9 +296,11 @@ func (h *HostLimiters) Report(host string, code int, retryAfter time.Duration)
   (`crawl.go:423`) stays untouched. `SetFloor` continues to lower the floor as today (auto
   delay starts from the floored rate). Reuse `classify`'s Retry-After parsing (backoff.go:70) —
   lift it into a shared helper, don't write a parallel `retryAfterFrom`.
-- Wire: INSIDE the `do` closure handed to `FetchWithRetry` (crawl.go:438) — per attempt, where
+- Wire: INSIDE the `do` closure handed to `FetchWithRetry` (crawl.go:429) — per attempt, where
   the response is in hand — call `c.limiters.Report(host, r.StatusCode, retryAfter)` only when
-  `opts.AutoThrottle`. Wiring after `FetchWithRetry` returns is the dead-wiring trap: backoff.go
+  `opts.AutoThrottle`. The rod-escalation branch in fetchPage never Reports (rare path —
+  AutoThrottle adapts on the static path only; note it in spec §10.6). Wiring after
+  `FetchWithRetry` returns is the dead-wiring trap: backoff.go
   already retries 429/503 (4 tries, jittered, Retry-After honored per attempt via
   `backoff.RetryAfter`), so intermediate 429/503s never surface at the call site — a post-hoc
   Report sees mostly final 200s → decay-only backoff, unit tests green. The mechanisms are
@@ -319,8 +331,8 @@ never below the floor, cap holds at 60s, auto-off = `Report` is a no-op.
   Existing `maxPages` cap and warn-and-proceed-on-expansion-error semantics unchanged — except
   expansion error in sitemap-only mode **is** fatal (there is no "seed-only" fallback: the seed
   URL was explicitly excluded from the contract).
-- Link-following guard: skip the `frontier.ExtractLinks` call in the finish handler
-  (crawl.go:492 — its only call site) when `SitemapOnly`.
+- Link-following guard: skip the `frontier.ExtractLinks` call in `cleanPage`
+  (crawl.go:483 — its only call site) when `SitemapOnly`.
 
 **Tests:** `crawl` httptest site with a sitemap listing 3 URLs, pages that link to a 4th
 non-sitemap URL — assert frontier = exactly the 3, 4th never fetched; empty sitemap → error;
@@ -335,7 +347,7 @@ non-sitemap URL — assert frontier = exactly the 3, 4th never fetched; empty si
 - `spec.md`: new `### 10.6 Competitive-parity delta (Phase J)` subsection after §10.5 (same
   register as §10.4/§10.5): the five features, flag names, caps (50×64KiB XHR, 60s throttle cap),
   the hidden-text strip contract and its `--page-format raw` escape hatch, CDP env/flag
-  precedence.
+  precedence, and the AutoThrottle static-path-only caveat (rod escalation bypasses Report).
 - `README.md`: feature bullets for `--capture-xhr`, `--auto-throttle`, `--sitemap-only`,
   `--cdp-url`, and a security note on injection stripping.
 - Exit codes: no new codes needed (2 = options errors, 3 = no pages, 4 = partial — all reused).
@@ -493,7 +505,10 @@ spike fixture) → **J.2** (XHR capture) → **J.3** (AutoThrottle) → **J.4** 
   `hidden` attr or inline style matching (lowercased, precompiled regexps):
   `display\s*:\s*none`, `visibility\s*:\s*hidden`, `font-size\s*:\s*0`, `opacity\s*:\s*0(\.0+)?\s*(;|$)`;
   plus comment nodes. `aria-hidden` and computed styles are OUT (precision; ponytail-comment the
-  ceiling). **`clean/clean.go`**: call it after the scope pass, before conversion; strip errors
+  ceiling). **`clean/clean.go`**: Clean builds no goquery doc today — build one from the scoped
+  htmlStr, strip, re-serialize (goquery.OuterHtml) back into htmlStr; that one string feeds
+  trafilatura, `CleanedPage.HTML`, and `Classify`'s body (entity re-encoding may shift md —
+  the spike inventories). Call it after the scope pass, before conversion; strip errors
   never fail the page.
 - **`testdata/clean/injection.html`** (new): six `MAGPIE_HIDDEN_<n>` markers in the six vectors +
   visible control paragraph + a `display:flex` span and an `aria-hidden` icon span that must
@@ -508,11 +523,12 @@ spike fixture) → **J.2** (XHR capture) → **J.3** (AutoThrottle) → **J.4** 
   parallel parser.
 - **`crawl/crawl.go`**: `Options.AutoThrottle` + `Options.SitemapOnly`; `SetAuto()` call in
   `newCrawlContext`; `Report` call INSIDE the `do` closure passed to `FetchWithRetry`
-  (crawl.go:438) — per attempt, never after it returns (backoff.go consumes intermediate
-  429/503s; post-hoc wiring = dead backoff with green tests); seed(): SitemapOnly ⇒ seeds =
+  (crawl.go:429) — per attempt, never after it returns (backoff.go consumes intermediate
+  429/503s; post-hoc wiring = dead backoff with green tests; the rod-escalation branch never
+  Reports — static path only, note in spec); seed(): SitemapOnly ⇒ seeds =
   expanded-only, zero expanded ⇒ typed `ErrSitemapOnlyEmpty` + `exitCode` arm → exit 3,
-  expansion error fatal; skip the `frontier.ExtractLinks` call (crawl.go:492, only call site)
-  when SitemapOnly.
+  expansion error fatal; skip the `frontier.ExtractLinks` call in cleanPage (crawl.go:483, only
+  call site) when SitemapOnly.
 - **`scrape/scrape.go`** (`ValidateOptions`, :114 — the one boundary CLI/MCP/batch share via
   `scrape.Run`; `cli/shared.go` has no validation role): XHR patterns compile (via
   `fetch.ValidateXHRPatterns`), CDP scheme ∈ {ws,wss,http,https}, `capture-xhr + render=static`
@@ -521,8 +537,9 @@ spike fixture) → **J.2** (XHR capture) → **J.3** (AutoThrottle) → **J.4** 
   `--cdp-url`, `--sitemap-only`, `--auto-throttle`; env fallback `MAGPIE_CDP_URL`;
   `sitemap-only + no-sitemap` → crawl-side predicate exit 2. The scrape envelope gains `xhr` in
   ONE cohesive block (Phase-G lesson: never scatter cases through the output ladder). Passing
-  CDP/CaptureXHR down: `fetchBrowser` (scrape.go:420) is at 4 positional args — switch it to
-  take `scrape.Options` (the direction the Phase-H review already took with `fetchURL`).
+  CDP/CaptureXHR down: `fetchBrowser` (scrape/scrape.go:420 — NOT cli/) is at 4 positional
+  args — switch it to take `scrape.Options` (the direction the Phase-H review already took
+  with `fetchURL`).
 - **`mcp/tools.go`**: `scrape_url` params `capture_xhr []string`, `cdp_url string`;
   `crawl_site` params `sitemap_only *FlexBool`, `auto_throttle *FlexBool` (house CrawlIn
   pattern); scrape-option rejections come free via `scrape.Run` → `ValidateOptions`; the

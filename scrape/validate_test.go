@@ -156,3 +156,76 @@ func TestValidateOptions_LangControlChars(t *testing.T) {
 		t.Errorf("profile+lang: %v", err)
 	}
 }
+
+// TestValidateOptions_CaptureXHR — Phase J: bad regexps surface pre-I/O
+// (exit 2), and capture-xhr with render=static is rejected with the
+// house wording (mirrors screenshot/actions).
+func TestValidateOptions_CaptureXHR(t *testing.T) {
+	t.Run("bad regexp surfaces pre-I/O", func(t *testing.T) {
+		err := ValidateOptions(Options{CaptureXHR: []string{"/ok/", "[bad"}})
+		var oe *OptionsError
+		if !errors.As(err, &oe) {
+			t.Fatalf("err = %v, want *OptionsError", err)
+		}
+		if !strings.Contains(err.Error(), `"[bad"`) {
+			t.Errorf("err %q missing the bad pattern", err)
+		}
+	})
+	t.Run("static rejected", func(t *testing.T) {
+		err := ValidateOptions(Options{CaptureXHR: []string{"/api/"}, Render: "static"})
+		var oe *OptionsError
+		if !errors.As(err, &oe) {
+			t.Fatalf("err = %v, want *OptionsError", err)
+		}
+		for _, want := range []string{"capture-xhr", "static"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("err %q missing %q", err, want)
+			}
+		}
+	})
+	t.Run("auto and browser pass", func(t *testing.T) {
+		for _, render := range []string{"", "auto", "browser"} {
+			if err := ValidateOptions(Options{CaptureXHR: []string{"/api/"}, Render: render}); err != nil {
+				t.Errorf("render %q: %v", render, err)
+			}
+		}
+	})
+}
+
+// TestValidateOptions_CDP — Phase J: the endpoint must be an absolute
+// ws/wss/http(s) URL; the error text is redacted (no userinfo).
+func TestValidateOptions_CDP(t *testing.T) {
+	for _, cdp := range []string{"ws://b:9222", "wss://farm.example/x", "http://127.0.0.1:9222", "https://b.example"} {
+		if err := ValidateOptions(Options{CDP: cdp}); err != nil {
+			t.Errorf("CDP %q: %v", cdp, err)
+		}
+	}
+	for _, cdp := range []string{"ftp://b:9222", "not a url", "b:9222"} {
+		err := ValidateOptions(Options{CDP: cdp})
+		var oe *OptionsError
+		if !errors.As(err, &oe) {
+			t.Errorf("CDP %q: err = %v, want *OptionsError", cdp, err)
+		}
+	}
+	// Credentials never surface, even in the rejection.
+	err := ValidateOptions(Options{CDP: "ftp://user:pass@b:9222"})
+	if err == nil || strings.Contains(err.Error(), "user:pass") {
+		t.Errorf("err = %v, want rejection without leaked credentials", err)
+	}
+}
+
+// TestResolveCDP — flag wins over MAGPIE_CDP_URL; env applies when the
+// flag is empty (MAGPIE_PROXY pattern).
+func TestResolveCDP(t *testing.T) {
+	t.Setenv("MAGPIE_CDP_URL", "ws://env-host:9222")
+	if got := resolveCDP(Options{CDP: "ws://flag-host:9222"}); got != "ws://flag-host:9222" {
+		t.Errorf("flag lost to env: %q", got)
+	}
+	if got := resolveCDP(Options{}); got != "ws://env-host:9222" {
+		t.Errorf("env fallback not applied: %q", got)
+	}
+	t.Setenv("MAGPIE_CDP_URL", "")
+	if got := resolveCDP(Options{}); got != "" {
+		t.Errorf("empty env must stay empty: %q", got)
+	}
+}

@@ -72,6 +72,13 @@ type Options struct {
 	// "auto" = strict auto-dispatch, or an extractor name for explicit
 	// selection. Explicit selection with a schema ignores the schema.
 	Vertical string
+	// CaptureXHR lists Go regexps for XHR/fetch response capture (rod
+	// only; render=static rejected at this boundary). Validated here.
+	CaptureXHR []string
+	// CDP is a remote browser endpoint (ws://, wss://, http(s)://);
+	// MAGPIE_CDP_URL is the env fallback (flag wins). Scheme validated
+	// here pre-I/O; empty = launch locally as always.
+	CDP string
 }
 
 // Result is one scraped page.
@@ -93,6 +100,9 @@ type Result struct {
 	// ScreenshotPNG carries raw PNG bytes for page-format screenshot;
 	// never JSON-serialized (Rendered carries the base64 form).
 	ScreenshotPNG []byte `json:"-"`
+	// XHR carries captured XHR/fetch bodies (additive-omitempty; nil
+	// unless --capture-xhr matched something).
+	XHR []fetch.XHRCapture `json:",omitempty"`
 }
 
 // OptionsError marks a pre-I/O options validation failure (CLI exit 2).
@@ -125,6 +135,23 @@ func ValidateOptions(o Options) error {
 	}
 	if o.PageFormat == "screenshot" && render == "static" {
 		return &OptionsError{"scrape: page format \"screenshot\" requires browser rendering (render auto|browser, not static)"}
+	}
+	if len(o.CaptureXHR) > 0 {
+		if render == "static" {
+			return &OptionsError{"scrape: capture-xhr requires browser rendering (render auto|browser, not static)"}
+		}
+		if _, err := fetch.ValidateXHRPatterns(o.CaptureXHR); err != nil {
+			return &OptionsError{fmt.Sprintf("scrape: %v", err)}
+		}
+	}
+	if cdp := resolveCDP(o); cdp != "" {
+		u, err := url.Parse(cdp)
+		switch {
+		case err != nil || u.Host == "":
+			return &OptionsError{fmt.Sprintf("scrape: cdp-url must be an absolute ws://, wss://, or http(s):// endpoint (got %s)", fetch.RedactProxy(u))}
+		case u.Scheme != "ws" && u.Scheme != "wss" && u.Scheme != "http" && u.Scheme != "https":
+			return &OptionsError{fmt.Sprintf("scrape: cdp-url scheme %q must be ws, wss, http, or https (%s)", u.Scheme, fetch.RedactProxy(u))}
+		}
 	}
 	if o.Viewport != "" {
 		if w, h, err := parseViewport(o.Viewport); err != nil || w <= 0 || h <= 0 {
@@ -162,11 +189,21 @@ func defaultRender(r string) string {
 	return r
 }
 
+// resolveCDP returns the CDP endpoint: the explicit option, else the
+// MAGPIE_CDP_URL env fallback (flag > env, the MAGPIE_PROXY pattern).
+func resolveCDP(o Options) string {
+	if o.CDP != "" {
+		return o.CDP
+	}
+	return os.Getenv("MAGPIE_CDP_URL")
+}
+
 // Run fetches, cleans, and optionally extracts one URL.
 func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) {
 	if d.DB == nil {
 		return Result{}, fmt.Errorf("scrape: nil DB")
 	}
+	o.CDP = resolveCDP(o) // resolve before validation so the scheme check sees the env fallback
 	if err := ValidateOptions(o); err != nil {
 		return Result{}, err
 	}
@@ -192,7 +229,7 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 	// With actions, the capture joins that browser session (click-then-
 	// capture: the screenshot becomes the final action step).
 	if o.PageFormat == "screenshot" {
-		png, serr := screenshotPage(ctx, rawURL, o.Viewport, o.Actions)
+		png, serr := screenshotPage(ctx, rawURL, o.Viewport, o.Actions, o.CDP)
 		if serr != nil {
 			finish(0, 1, "error")
 			return Result{}, serr
@@ -244,7 +281,7 @@ func Run(ctx context.Context, d Deps, rawURL string, o Options) (Result, error) 
 		return Result{}, &clean.QualityError{Issue: cleaned.Quality, URL: rawURL}
 	}
 	base := Result{RunID: runID, URL: page.URL, FinalURL: cleaned.FinalURL, Title: cleaned.Title,
-		Markdown: cleaned.Markdown, StructuredData: cleaned.StructuredData}
+		Markdown: cleaned.Markdown, StructuredData: cleaned.StructuredData, XHR: page.XHR}
 	if o.PageFormat == "raw" {
 		// The decoded response body, untouched (quality gate above still
 		// classified it — challenge raw is a typed error, never bytes).
@@ -352,8 +389,8 @@ func runVertical(ctx context.Context, vf vertical.Fetcher, rawURL string, ex ver
 func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render string, o Options) (*fetch.FetchResponse, error) {
 	// Actions force the browser path: their whole point is DOM interaction
 	// a static fetch cannot honor (ValidateOptions rejected static).
-	if render == "browser" || len(o.Actions) > 0 {
-		return fetchBrowser(ctx, rawURL, o.Lang, o.Actions)
+	if render == "browser" || len(o.Actions) > 0 || len(o.CaptureXHR) > 0 {
+		return fetchBrowser(ctx, rawURL, o)
 	}
 	// A4 pass-through: every status reaches Clean+Classify so blocked pages
 	// get typed quality errors instead of "fetch: HTTP %d".
@@ -364,7 +401,7 @@ func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render string, o
 		// callers asked for no browser and get the typed error directly.
 		var ce *fetch.ChallengeError
 		if render != "static" && errors.As(err, &ce) {
-			bresp, berr := fetchBrowser(ctx, rawURL, o.Lang, o.Actions)
+			bresp, berr := fetchBrowser(ctx, rawURL, o)
 			if berr == nil && fetch.DetectChallenge(bresp.HTML, bresp.Headers, bresp.StatusCode) == "" {
 				return bresp, nil
 			}
@@ -380,7 +417,7 @@ func fetchURL(ctx context.Context, vf vertical.Fetcher, rawURL, render string, o
 	if embedded || !fetch.NeedsBrowser(score) {
 		return resp, nil
 	}
-	return fetchBrowser(ctx, rawURL, o.Lang, o.Actions)
+	return fetchBrowser(ctx, rawURL, o)
 }
 
 // parseViewport parses the WxH screenshot viewport shape (0,0 = default).
@@ -402,31 +439,35 @@ func parseViewport(v string) (int, int, error) {
 
 // screenshotPage captures a full-page PNG through a fresh browser;
 // with actions the capture joins the action session as its final step.
-func screenshotPage(ctx context.Context, rawURL, viewport string, actions []string) ([]byte, error) {
+func screenshotPage(ctx context.Context, rawURL, viewport string, actions []string, cdp string) ([]byte, error) {
 	w, h, err := parseViewport(viewport)
 	if err != nil {
 		return nil, &OptionsError{fmt.Sprintf("scrape: viewport %q must be WxH (e.g. 1280x800)", viewport)}
 	}
-	if len(actions) == 0 {
-		return fetch.ScreenshotPage(ctx, rawURL, w, h)
-	}
-	acts, err := fetch.ParseActions(actions)
-	if err != nil {
-		return nil, err
-	}
-	return fetch.ScreenshotActions(ctx, rawURL, w, h, acts)
-}
-
-func fetchBrowser(ctx context.Context, rawURL, lang string, actions []string) (*fetch.FetchResponse, error) {
-	// ValidateOptions pre-flighted the lines for Run; direct callers get
-	// the typed line error here.
 	acts, err := fetch.ParseActions(actions)
 	if err != nil {
 		return nil, err
 	}
 	rod := fetch.NewRodFetcher()
+	rod.CDP = cdp
 	defer func() { _ = rod.Close() }() //nolint:errcheck // browser teardown; failure unactionable
-	return rod.FetchWithActions(ctx, fetch.FetchRequest{URL: rawURL, Lang: lang}, acts)
+	if len(acts) == 0 {
+		return rod.Screenshot(ctx, rawURL, w, h)
+	}
+	return rod.ScreenshotActions(ctx, rawURL, w, h, acts)
+}
+
+func fetchBrowser(ctx context.Context, rawURL string, o Options) (*fetch.FetchResponse, error) {
+	// ValidateOptions pre-flighted the lines for Run; direct callers get
+	// the typed line error here.
+	acts, err := fetch.ParseActions(o.Actions)
+	if err != nil {
+		return nil, err
+	}
+	rod := fetch.NewRodFetcher()
+	rod.CDP = o.CDP
+	defer func() { _ = rod.Close() }() //nolint:errcheck // browser teardown; failure unactionable
+	return rod.FetchWithActions(ctx, fetch.FetchRequest{URL: rawURL, Lang: o.Lang, CaptureXHR: o.CaptureXHR}, acts)
 }
 
 func domainOfURL(rawURL string) string {

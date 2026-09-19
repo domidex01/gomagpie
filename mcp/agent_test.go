@@ -40,6 +40,7 @@ type fakeAgentResp struct {
 	status int
 	body   []byte
 	err    error
+	xhr    []fetch.XHRCapture // canned captures (Phase J round-trips)
 }
 
 func (f *fakeAgentFetcher) Fetch(_ context.Context, req fetch.FetchRequest) (*fetch.FetchResponse, error) {
@@ -71,7 +72,7 @@ func (f *fakeAgentFetcher) Fetch(_ context.Context, req fetch.FetchRequest) (*fe
 	if st == 0 {
 		st = 200
 	}
-	return &fetch.FetchResponse{URL: req.URL, FinalURL: req.URL, StatusCode: st, HTML: r.body}, nil
+	return &fetch.FetchResponse{URL: req.URL, FinalURL: req.URL, StatusCode: st, HTML: r.body, XHR: r.xhr}, nil
 }
 
 var _ extract.Prompter = (*fakePrompterExtractor)(nil)
@@ -992,5 +993,140 @@ func TestMCP_SearchZeroKeyProviderSmoke(t *testing.T) {
 	}
 	if !strings.Contains(s, "refused") && !strings.Contains(s, "connect") {
 		t.Errorf("error %s should be a dial failure", s)
+	}
+}
+
+// TestScrapeOut_XHRShape — the agent-facing capture surface: ScrapeOut
+// marshals the xhr array when captures exist and omits the key entirely
+// otherwise (additive-omitempty — no envelope drift without capture_xhr).
+// (capture-xhr forces the browser path in scrape.Run, so the value-level
+// round trip is the browser-tagged live test; this pins the output shape.)
+func TestScrapeOut_XHRShape(t *testing.T) {
+	canned := []fetch.XHRCapture{{
+		URL: "https://spa.example/api/data", Status: 200,
+		MIMEType: "application/json", Body: `{"ok":true}`,
+	}}
+	raw, err := json.Marshal(magpiemcp.ScrapeOut{URL: "https://spa.example/", XHR: canned})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	xhrs, ok := out["xhr"].([]any)
+	if !ok || len(xhrs) != 1 {
+		t.Fatalf("out xhr = %#v, want exactly one capture", out["xhr"])
+	}
+	first, _ := xhrs[0].(map[string]any)
+	if first["url"] != "https://spa.example/api/data" || first["status"] != float64(200) ||
+		first["mime"] != "application/json" || first["body"] != `{"ok":true}` {
+		t.Errorf("capture = %#v, want the canned capture intact", first)
+	}
+
+	raw, err = json.Marshal(magpiemcp.ScrapeOut{URL: "https://spa.example/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bare map[string]any
+	if err := json.Unmarshal(raw, &bare); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := bare["xhr"]; present {
+		t.Error("nil XHR must omit the xhr key entirely")
+	}
+}
+
+// TestScrapeURL_CaptureXHRStaticRejected — the options error crosses the
+// MCP boundary as a tool error (house wording, no fetch).
+func TestScrapeURL_CaptureXHRStaticRejected(t *testing.T) {
+	db := openMCPDB(t)
+	ff := &fakeAgentFetcher{bodies: map[string]fakeAgentResp{
+		"https://x.example/": {body: agentHTML("X")},
+	}}
+	cs := dialInMemory(t, magpiemcp.NewServer(agentDeps(db, &fakeExtractor{}, nil, ff)), nil)
+	res := callTool(t, cs, "scrape_url", map[string]any{
+		"url": "https://x.example/", "render": "static", "capture_xhr": []string{"/api/"},
+	}, "")
+	if !res.IsError {
+		t.Fatal("capture_xhr + render=static must be a tool error")
+	}
+	text, merr := json.Marshal(res.Content)
+	if merr != nil {
+		t.Fatal(merr)
+	}
+	for _, want := range []string{"capture-xhr", "static"} {
+		if !strings.Contains(string(text), want) {
+			t.Errorf("error %s missing %q", text, want)
+		}
+	}
+	if len(ff.order) != 0 {
+		t.Errorf("fetcher called %v times; rejection must be pre-I/O", len(ff.order))
+	}
+}
+
+// TestScrapeURL_CDPBadSchemeRejected — cdp_url is validated through the
+// same scrape.Run boundary (scheme check), pre-I/O, redacted.
+func TestScrapeURL_CDPBadSchemeRejected(t *testing.T) {
+	db := openMCPDB(t)
+	ff := &fakeAgentFetcher{bodies: map[string]fakeAgentResp{
+		"https://x.example/": {body: agentHTML("X")},
+	}}
+	cs := dialInMemory(t, magpiemcp.NewServer(agentDeps(db, &fakeExtractor{}, nil, ff)), nil)
+	res := callTool(t, cs, "scrape_url", map[string]any{
+		"url": "https://x.example/", "cdp_url": "ftp://user:pass@b:9222",
+	}, "")
+	if !res.IsError {
+		t.Fatal("bad cdp_url scheme must be a tool error")
+	}
+	text, merr := json.Marshal(res.Content)
+	if merr != nil {
+		t.Fatal(merr)
+	}
+	if strings.Contains(string(text), "user:pass") {
+		t.Errorf("tool error leaks credentials: %s", text)
+	}
+}
+
+// TestCrawlSite_FlexBoolParams — sitemap_only/auto_throttle coerce like
+// the house CrawlIn bools (string "true" and JSON true; absent = nil).
+func TestCrawlSite_FlexBoolParams(t *testing.T) {
+	var in magpiemcp.CrawlIn
+	if err := json.Unmarshal([]byte(`{"sitemap_only":"true","auto_throttle":true}`), &in); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if in.SitemapOnly == nil || !bool(*in.SitemapOnly) {
+		t.Errorf("sitemap_only = %v, want true", in.SitemapOnly)
+	}
+	if in.AutoThrottle == nil || !bool(*in.AutoThrottle) {
+		t.Errorf("auto_throttle = %v, want true", in.AutoThrottle)
+	}
+	var absent magpiemcp.CrawlIn
+	if err := json.Unmarshal([]byte(`{}`), &absent); err != nil {
+		t.Fatal(err)
+	}
+	if absent.SitemapOnly != nil || absent.AutoThrottle != nil {
+		t.Error("absent bools must stay nil")
+	}
+}
+
+// TestCrawlSite_SitemapConflictToolError — the crawl-side predicate fires
+// at the MCP edge too; CLI and MCP can never drift.
+func TestCrawlSite_SitemapConflictToolError(t *testing.T) {
+	db := openMCPDB(t)
+	cs := dialInMemory(t, magpiemcp.NewServer(agentDeps(db, &fakeExtractor{}, nil,
+		&fakeAgentFetcher{bodies: map[string]fakeAgentResp{}})), nil)
+	res := callTool(t, cs, "crawl_site", map[string]any{
+		"url": "https://example.com/", "sitemap_only": true, "no_sitemap": true,
+	}, "")
+	if !res.IsError {
+		t.Fatal("sitemap_only + no_sitemap must be a tool error")
+	}
+	text, merr := json.Marshal(res.Content)
+	if merr != nil {
+		t.Fatal(merr)
+	}
+	if !strings.Contains(string(text), "contradictory") {
+		t.Errorf("error %s missing the contradiction wording", text)
 	}
 }

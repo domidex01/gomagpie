@@ -962,3 +962,58 @@ func TestCrawl_SeedExpansionWarnProceed(t *testing.T) {
 		t.Errorf("stderr %q missing 'continuing seed-only' warning", stderr)
 	}
 }
+
+// TestAutoThrottle_WiredInsideRetry — the PR#11 dead-wiring tripwire.
+// backoff.go consumes each page's 429 (Retry-After: 0 → immediate retry),
+// so the ONLY observable difference between Report wired inside the do
+// closure (correct: sees the 429, delay doubles) and Report wired after
+// FetchWithRetry returns (broken: sees only final 200s, delay stays at
+// the floor) is the WAIT the doubled delay imposes on later same-host
+// pages. Five serialized pages: correct wiring blocks pages 4-5 for
+// >1.5s each (elapsed ≈4.5s+); broken wiring stays ≈1s. Load-bearing real
+// time — Rate:2 sets a 500ms base delay; the assert leaves 1s of slack
+// against slow CI in the correct case, and the broken case undershoots
+// by >2s. Do not "optimize" the sleeps away: they are the assertion.
+func TestAutoThrottle_WiredInsideRetry(t *testing.T) {
+	paths := []string{"/x", "/1", "/2", "/3", "/4"}
+	mu := sync.Mutex{}
+	hits := map[string]int{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		n := hits[r.URL.Path]
+		hits[r.URL.Path]++
+		mu.Unlock()
+		if n == 0 { // first attempt on every page: block signal
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(itemPage(paths...))) //nolint:errcheck // httptest local; short write unactionable
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+
+	start := time.Now()
+	captureStderr(t, func() { // sitemap probes 404; swallow the warnings
+		res, err := Run(context.Background(), Options{
+			SeedURL: srv.URL + "/x", Schema: mustTestSchema(t),
+			MaxPages: 5, MaxDepth: 1, SameHost: true,
+			FetchWorkers: 1, Rate: 2, Format: "jsonl", Out: filepath.Join(t.TempDir(), "r.jsonl"),
+			DB: db, Extractor: fx, AutoThrottle: true,
+		})
+		if err != nil {
+			t.Errorf("Run: %v", err)
+		}
+		if res.PagesOK != 5 {
+			t.Errorf("pages_ok = %d, want 5", res.PagesOK)
+		}
+	})
+	elapsed := time.Since(start)
+	if elapsed < 3*time.Second {
+		t.Errorf("run took %v; AutoThrottle Report looks dead-wired (want ≥3s: the 429-reported delay must block later pages)", elapsed)
+	}
+}

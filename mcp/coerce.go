@@ -256,12 +256,14 @@ func (in *ScrapeIn) UnmarshalJSON(data []byte) error {
 		Cookies         string          `json:"cookies"`
 		Actions         json.RawMessage `json:"actions"`
 		Lang            string          `json:"lang"`
+		CaptureXHR      json.RawMessage `json:"capture_xhr"`
+		CDP             string          `json:"cdp_url"`
 	}
 	if err := json.Unmarshal(data, &sh); err != nil {
 		return err
 	}
-	in.URL, in.Render, in.PageFormat, in.Profile, in.Cookies, in.Lang =
-		sh.URL, sh.Render, sh.PageFormat, sh.Profile, sh.Cookies, sh.Lang
+	in.URL, in.Render, in.PageFormat, in.Profile, in.Cookies, in.Lang, in.CDP =
+		sh.URL, sh.Render, sh.PageFormat, sh.Profile, sh.Cookies, sh.Lang, sh.CDP
 	if err := decodeFlexField("schema", sh.Schema, &in.Schema); err != nil {
 		return err
 	}
@@ -277,18 +279,25 @@ func (in *ScrapeIn) UnmarshalJSON(data []byte) error {
 	if err := decodeFlexField("actions", sh.Actions, &in.Actions); err != nil {
 		return err
 	}
+	if err := decodeFlexField("capture_xhr", sh.CaptureXHR, &in.CaptureXHR); err != nil {
+		return err
+	}
 	return decodeFlexField("only_main_content", sh.OnlyMainContent, &in.OnlyMainContent)
 }
 
 // UnmarshalJSON decodes CrawlIn with param-named flex errors.
 func (in *CrawlIn) UnmarshalJSON(data []byte) error {
 	var sh struct {
-		URL      string          `json:"url"`
-		MaxPages json.RawMessage `json:"max_pages"`
-		MaxDepth json.RawMessage `json:"max_depth"`
-		SameHost json.RawMessage `json:"same_host"`
-		Schema   json.RawMessage `json:"schema"`
-		RunID    string          `json:"run_id"`
+		URL          string          `json:"url"`
+		MaxPages     json.RawMessage `json:"max_pages"`
+		MaxDepth     json.RawMessage `json:"max_depth"`
+		SameHost     json.RawMessage `json:"same_host"`
+		Schema       json.RawMessage `json:"schema"`
+		RunID        string          `json:"run_id"`
+		NoSitemap    json.RawMessage `json:"no_sitemap"`
+		Subdomains   json.RawMessage `json:"allow_subdomains"`
+		SitemapOnly  json.RawMessage `json:"sitemap_only"`
+		AutoThrottle json.RawMessage `json:"auto_throttle"`
 	}
 	if err := json.Unmarshal(data, &sh); err != nil {
 		return err
@@ -303,7 +312,19 @@ func (in *CrawlIn) UnmarshalJSON(data []byte) error {
 	if err := decodeFlexField("same_host", sh.SameHost, &in.SameHost); err != nil {
 		return err
 	}
-	return decodeFlexField("schema", sh.Schema, &in.Schema)
+	if err := decodeFlexField("schema", sh.Schema, &in.Schema); err != nil {
+		return err
+	}
+	if err := decodeFlexField("no_sitemap", sh.NoSitemap, &in.NoSitemap); err != nil {
+		return err
+	}
+	if err := decodeFlexField("allow_subdomains", sh.Subdomains, &in.AllowSubdomains); err != nil {
+		return err
+	}
+	if err := decodeFlexField("sitemap_only", sh.SitemapOnly, &in.SitemapOnly); err != nil {
+		return err
+	}
+	return decodeFlexField("auto_throttle", sh.AutoThrottle, &in.AutoThrottle)
 }
 
 // UnmarshalJSON decodes ExtractIn with param-named flex errors.

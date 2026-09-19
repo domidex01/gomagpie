@@ -3,6 +3,7 @@ package fetch
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -13,6 +14,10 @@ import (
 // never at import or startup. Pool size 1 in Phase 1.
 type RodFetcher struct {
 	browser *rod.Browser
+	// CDP is an optional remote browser endpoint (ws://, wss://, or
+	// http(s)://). When set, ensureBrowser connects to it and the local
+	// launcher never runs — no download, no local Chrome (farms/CI).
+	CDP string
 }
 
 // NewRodFetcher constructs without launching (launch is lazy).
@@ -42,9 +47,18 @@ func (r *RodFetcher) Close() error {
 }
 
 // ensureBrowser lazily launches and connects the browser exactly once
-// per RodFetcher (pool size 1).
+// per RodFetcher (pool size 1). With CDP set, it connects to the remote
+// endpoint instead — the launcher (and its local download) never runs.
 func (r *RodFetcher) ensureBrowser() error {
 	if r.browser != nil {
+		return nil
+	}
+	if r.CDP != "" {
+		r.browser = rod.New().ControlURL(r.CDP)
+		if err := r.browser.Connect(); err != nil {
+			r.browser = nil // never-connected: Close() must stay a no-op
+			return fmt.Errorf("fetch: connect remote browser %s: %w", redactCDP(r.CDP), err)
+		}
 		return nil
 	}
 	l := launcher.New()
@@ -54,6 +68,7 @@ func (r *RodFetcher) ensureBrowser() error {
 	}
 	r.browser = rod.New().ControlURL(controlURL)
 	if err := r.browser.Connect(); err != nil {
+		r.browser = nil // never-connected: Close() must stay a no-op
 		return fmt.Errorf("fetch: connect browser: %w", err)
 	}
 	return nil
@@ -68,6 +83,17 @@ const screenshotBudget = 45 * time.Second
 // Non-positive width/height keeps the browser default viewport.
 func (r *RodFetcher) Screenshot(ctx context.Context, rawURL string, width, height int) ([]byte, error) {
 	return r.screenshot(ctx, rawURL, width, height, nil)
+}
+
+// redactCDP renders a CDP endpoint without userinfo — credentials never
+// appear in errors (RedactProxy's rule, different shape: the scheme and
+// path are operationally useful for a browser endpoint).
+func redactCDP(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "(cdp endpoint)"
+	}
+	return u.Scheme + "://" + u.Host + u.Path
 }
 
 // ScreenshotPage news + closes a throwaway RodFetcher for one capture —

@@ -119,13 +119,24 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 // FetchWithActions navigates, waits for load, runs the action lines in
 // order, settles, and returns the final HTML. Fetch is this with nil
 // actions — one code path, so non-action browser behavior cannot drift.
+// With CaptureXHR set, matching XHR/fetch response bodies ride the
+// response: subscribe BEFORE navigation, drain AFTER the settle and
+// BEFORE page.Close (CDP evicts buffers on close).
 func (r *RodFetcher) FetchWithActions(ctx context.Context, req FetchRequest, acts []Action) (*FetchResponse, error) {
 	if err := r.ensureBrowser(); err != nil {
 		return nil, err
 	}
 	cctx, cancel := context.WithTimeout(ctx, budget(req))
 	defer cancel()
-	page, err := r.openPage(cctx, req)
+	var caps *xhrCollector
+	if len(req.CaptureXHR) > 0 {
+		patterns, err := ValidateXHRPatterns(req.CaptureXHR)
+		if err != nil {
+			return nil, err
+		}
+		caps = &xhrCollector{patterns: patterns}
+	}
+	page, _, err := r.openPage(cctx, req, caps) // event consumer starts inside, pre-navigation
 	if err != nil {
 		return nil, err
 	}
@@ -147,36 +158,42 @@ func (r *RodFetcher) FetchWithActions(ctx context.Context, req FetchRequest, act
 		_ = page.Close() //nolint:errcheck // error path; teardown failure unactionable
 		return nil, fmt.Errorf("fetch: read html: %w", err)
 	}
+	resp := &FetchResponse{URL: req.URL, FinalURL: req.URL, StatusCode: 200, HTML: []byte(html)}
+	if caps != nil {
+		resp.XHR = caps.drain(page) // body buffers evict at page.Close — drain first
+	}
 	if err := page.Close(); err != nil {
 		return nil, fmt.Errorf("fetch: close page: %w", err)
 	}
-	return &FetchResponse{URL: req.URL, FinalURL: req.URL, StatusCode: 200, HTML: []byte(html)}, nil
+	return resp, nil
 }
 
-// openPage navigates to req.URL. With Lang set, the header must ride the
-// document request itself: open blank, set the extra header, then
-// navigate (NetworkSetExtraHTTPHeaders only affects later requests).
-func (r *RodFetcher) openPage(cctx context.Context, req FetchRequest) (*rod.Page, error) {
-	if req.Lang == "" {
-		page, err := r.browser.Context(cctx).Page(proto.TargetCreateTarget{URL: req.URL})
-		if err != nil {
-			return nil, fmt.Errorf("fetch: navigate: %w", err)
-		}
-		return page, nil
-	}
+// openPage creates the page, optionally sets the lang header, subscribes
+// XHR capture (between creation and navigation — early responses must be
+// seen), then navigates. Returns the page and the capture stop-func (nil
+// when caps is nil). One create-then-navigate shape for both lang paths:
+// the blank-page round trip is sub-ms next to the fixed 2s settle.
+func (r *RodFetcher) openPage(cctx context.Context, req FetchRequest, caps *xhrCollector) (*rod.Page, func(), error) {
 	page, err := r.browser.Context(cctx).Page(proto.TargetCreateTarget{})
 	if err != nil {
-		return nil, fmt.Errorf("fetch: open page: %w", err)
+		return nil, nil, fmt.Errorf("fetch: open page: %w", err)
 	}
-	if _, err := page.SetExtraHeaders([]string{"Accept-Language", req.Lang}); err != nil {
-		_ = page.Close() //nolint:errcheck // error path; teardown failure unactionable
-		return nil, fmt.Errorf("fetch: set lang header: %w", err)
+	if req.Lang != "" {
+		if _, err := page.SetExtraHeaders([]string{"Accept-Language", req.Lang}); err != nil {
+			_ = page.Close() //nolint:errcheck // error path; teardown failure unactionable
+			return nil, nil, fmt.Errorf("fetch: set lang header: %w", err)
+		}
+	}
+	var wait func()
+	if caps != nil {
+		wait = caps.subscribe(page)
+		go wait() // push-consume network events until the page ctx dies (void callbacks never satisfy the loop)
 	}
 	if err := page.Navigate(req.URL); err != nil {
 		_ = page.Close() //nolint:errcheck // error path; teardown failure unactionable
-		return nil, fmt.Errorf("fetch: navigate: %w", err)
+		return nil, nil, fmt.Errorf("fetch: navigate: %w", err)
 	}
-	return page, nil
+	return page, wait, nil
 }
 
 // runActions executes action lines in order under the fetch budget.
@@ -256,7 +273,7 @@ func (r *RodFetcher) screenshot(ctx context.Context, rawURL string, width, heigh
 	}
 	cctx, cancel := context.WithTimeout(ctx, screenshotBudget)
 	defer cancel()
-	page, err := r.openPage(cctx, FetchRequest{URL: rawURL})
+	page, _, err := r.openPage(cctx, FetchRequest{URL: rawURL}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +305,11 @@ func (r *RodFetcher) screenshot(ctx context.Context, rawURL string, width, heigh
 // (CLI-only at the MCP boundary: an action line would hand an agent a
 // server-side file-write).
 func ScreenshotActions(ctx context.Context, rawURL string, width, height int, acts []Action) ([]byte, error) {
-	r := NewRodFetcher()
-	defer func() { _ = r.Close() }() //nolint:errcheck // browser teardown; failure unactionable
+	return NewRodFetcher().ScreenshotActions(ctx, rawURL, width, height, acts)
+}
+
+// ScreenshotActions captures through THIS fetcher (the CDP field is
+// honored) — scrape's screenshot path sets CDP and calls the method.
+func (r *RodFetcher) ScreenshotActions(ctx context.Context, rawURL string, width, height int, acts []Action) ([]byte, error) {
 	return r.screenshot(ctx, rawURL, width, height, acts)
 }

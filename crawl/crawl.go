@@ -26,6 +26,21 @@ var ErrRobotsBlocked = errors.New("robots.txt disallows crawl")
 // ErrCostCeiling marks a crawl aborted before exceeding --max-cost.
 var ErrCostCeiling = errors.New("cost ceiling exceeded")
 
+// ErrSitemapOnlyEmpty marks a --sitemap-only run whose sitemap expansion
+// produced zero in-scope URLs. Mapped to exit 3 (all pages failed) —
+// never a silent 0-page success.
+var ErrSitemapOnlyEmpty = errors.New("sitemap-only: no URLs found")
+
+// ValidateSitemapOnly rejects the contradictory pair (--sitemap-only has
+// no seed to fall back to, so --no-sitemap would make it a no-op). Called
+// at both edges: CLI (exit 2 via fail) and MCP crawl_site (tool error).
+func ValidateSitemapOnly(sitemapOnly, noSitemap bool) error {
+	if sitemapOnly && noSitemap {
+		return errors.New("crawl: --sitemap-only and --no-sitemap are contradictory (sitemap-only has no seed to fall back to)")
+	}
+	return nil
+}
+
 // Options configures one crawl run.
 type Options struct {
 	SeedURL      string
@@ -53,6 +68,12 @@ type Options struct {
 	Exclude         []string
 	AllowSubdomains bool
 	NoSitemap       bool // skip sitemap seed expansion
+	// SitemapOnly makes the frontier exactly the (scope-filtered) sitemap
+	// URLs: no seed enqueue, no link-following. Contradicts NoSitemap.
+	SitemapOnly bool
+	// AutoThrottle enables adaptive per-host pacing: Report backs off ×2
+	// on 429/5xx, decays on success (opt-in — Scrapy ships it off too).
+	AutoThrottle bool
 	// Progress is called once per done/errored page from the sink goroutine
 	// (nil = off). Total is intentionally omitted: the frontier total is
 	// unknowable upfront.
@@ -197,6 +218,9 @@ func (c *crawlContext) begin() error {
 
 	c.checker = NewChecker()
 	c.limiters = NewHostLimiters(c.opts.Rate, 3)
+	if c.opts.AutoThrottle {
+		c.limiters.SetAuto()
+	}
 
 	if c.opts.Resume {
 		if _, err := c.db.ResetInflight(c.runID); err != nil {
@@ -243,17 +267,30 @@ func (c *crawlContext) seed(ctx context.Context) error {
 	seeds := []string{c.opts.SeedURL}
 	if isHTTP(c.opts.SeedURL) && !c.opts.NoSitemap {
 		// Expand the seed through the sitemap (page URLs, capped at
-		// maxPages) instead of enqueuing raw sitemap-XML URLs. Expansion
-		// NEVER fails the crawl: warn and proceed seed-only — a site
-		// without robots.txt/sitemap.xml crawls exactly as before.
+		// maxPages) instead of enqueuing raw sitemap-XML URLs. In normal
+		// mode expansion NEVER fails the crawl: warn and proceed seed-only.
+		// In sitemap-only mode the expansion IS the frontier, so an
+		// expansion error is fatal (there is no seed-only fallback — the
+		// seed URL is explicitly excluded from the contract).
 		expanded, _, serr := ListSitemapURLs(ctx, c.static, c.opts.SeedURL)
 		if serr != nil {
+			if c.opts.SitemapOnly {
+				return fmt.Errorf("crawl: sitemap-only: %w", serr)
+			}
 			fmt.Fprintf(os.Stderr, "crawl: sitemap expansion: %v; continuing seed-only\n", serr)
 		} else {
 			if len(expanded) > c.maxPages {
 				expanded = expanded[:c.maxPages]
 			}
-			seeds = append(seeds, scopeFilterExpansion(c.scope, c.opts.SeedURL, expanded)...)
+			filtered := scopeFilterExpansion(c.scope, c.opts.SeedURL, expanded)
+			if c.opts.SitemapOnly {
+				seeds = filtered // seed itself excluded unless the sitemap lists it
+				if len(seeds) == 0 {
+					return fmt.Errorf("crawl: %w", ErrSitemapOnlyEmpty)
+				}
+			} else {
+				seeds = append(seeds, filtered...)
+			}
 		}
 	}
 	n, err := c.frontier.Add(seeds, 0)
@@ -431,6 +468,17 @@ func (c *crawlContext) fetchPage(ctx context.Context, task core.FetchTask) (core
 		// Reset on transport failure: qualityErr must classify the
 		// terminal outcome, never a stale response from an earlier try.
 		last = r
+		// AutoThrottle reports PER ATTEMPT, inside the retry closure:
+		// backoff.go consumes intermediate 429/503s, so post-hoc wiring
+		// would see only final 200s and the backoff would be dead code.
+		// The rod-escalation branch below never Reports — AutoThrottle
+		// adapts on the static path only (rare escalation path).
+		if c.opts.AutoThrottle && r != nil {
+			if host, herr := hostOf(task.URL); herr == nil && host != "" {
+				ra, _ := retryAfterOf(r.Headers)
+				c.limiters.Report(host, r.StatusCode, ra)
+			}
+		}
 		return r, ferr
 	})
 	if err != nil {
@@ -479,9 +527,12 @@ func (c *crawlContext) cleanPage(ctx context.Context, page core.FetchedPage) (co
 		finalURL = page.Task.URL
 	}
 	sidecar := clean.HarvestSidecar(html)
-	// Link extraction ALWAYS (nav links live in boilerplate).
-	if links, err := c.frontier.ExtractLinks(html, finalURL, page.Task.Depth, c.maxDepth, c.scope); err == nil && links > 0 {
-		c.outstanding.Add(int64(links))
+	// Link extraction ALWAYS (nav links live in boilerplate) — except
+	// sitemap-only runs, whose frontier contract is exactly the sitemap.
+	if !c.opts.SitemapOnly {
+		if links, err := c.frontier.ExtractLinks(html, finalURL, page.Task.Depth, c.maxDepth, c.scope); err == nil && links > 0 {
+			c.outstanding.Add(int64(links))
+		}
 	}
 	// Trafilatura only when the page will need an LLM.
 	// ponytail: one SQLite point read per page to decide (ceiling =
