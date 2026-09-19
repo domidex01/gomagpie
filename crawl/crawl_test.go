@@ -1357,3 +1357,78 @@ func TestAutoThrottle_WiredInsideRetry(t *testing.T) {
 		t.Errorf("run took %v; AutoThrottle Report looks dead-wired (want ≥3s: the 429-reported delay must block later pages)", elapsed)
 	}
 }
+
+// TestCrawl_CorpusSitemapOnly — Phase I × Phase J interaction: the
+// sitemap-only frontier feeds the corpus writer. Seed not listed → never
+// fetched; links not followed; every fetched page becomes a corpus record
+// (zero LLM — the fake extractor stays at 0).
+func TestCrawl_CorpusSitemapOnly(t *testing.T) {
+	o := newSitemapOnlyOrigin(t, allowAllRobots,
+		map[string]string{"/a": itemPage(), "/b": itemPage(), "/c": itemPage()},
+		"/a", "/b", "/c")
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+	var mu sync.Mutex
+	var recs []map[string]any
+	res, err := Run(context.Background(), Options{
+		SeedURL: o.srv.URL + "/", Corpus: true, SitemapOnly: true,
+		Schema: nil, Extractor: fx,
+		MaxPages: 10, MaxDepth: 0, SameHost: true,
+		FetchWorkers: 2, Rate: 1000, Format: "jsonl", Out: filepath.Join(t.TempDir(), "c.jsonl"),
+		DB: db,
+		OnRecord: func(r map[string]any) {
+			mu.Lock()
+			defer mu.Unlock()
+			recs = append(recs, r)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.PagesOK != 3 || res.Records != 3 || res.PagesErr != 0 {
+		t.Fatalf("res = ok:%d rec:%d err:%d, want 3/3/0", res.PagesOK, res.Records, res.PagesErr)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(recs) != 3 {
+		t.Fatalf("records = %d, want 3", len(recs))
+	}
+	for _, r := range recs {
+		if _, ok := r["markdown"]; !ok {
+			t.Errorf("record %v missing markdown (corpus envelope)", r)
+		}
+		if _, ok := r["extracted"]; ok {
+			t.Errorf("record %v carries extracted key (wrong envelope for corpus)", r)
+		}
+	}
+	if n := o.count("/"); n != 0 {
+		t.Errorf("seed fetched %d times; unlisted seed must not enqueue", n)
+	}
+	if got := fx.total(); got != 0 {
+		t.Errorf("extractor calls = %d, want 0", got)
+	}
+}
+
+// TestCrawl_CorpusAutoThrottle — Phase I × Phase J: AutoThrottle's Report
+// wiring lives in fetchPage, which corpus does not skip — a throttled
+// corpus run completes normally (the ×2/decay math itself is pinned by
+// TestHostLimiters_Auto*; this row proves the flags co-exist end to end).
+func TestCrawl_CorpusAutoThrottle(t *testing.T) {
+	pages := map[string]string{"/": itemPage("/a"), "/a": itemPage("/b"), "/b": itemPage()}
+	o := newSiteOrigin(t, pages, "")
+	db := openCrawlDB(t)
+	fx := &fakeExtractor{script: map[string]map[string]any{"default": crawlTruth}}
+	res, err := Run(context.Background(), Options{
+		SeedURL: o.srv.URL + "/", Corpus: true, AutoThrottle: true,
+		Schema: nil, Extractor: fx,
+		MaxPages: 3, MaxDepth: 3, SameHost: true,
+		FetchWorkers: 4, Rate: 1000, Format: "jsonl", Out: filepath.Join(t.TempDir(), "c.jsonl"),
+		DB: db,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.PagesOK != 3 || res.Records != 3 || res.PagesErr != 0 {
+		t.Fatalf("res = ok:%d rec:%d err:%d, want 3/3/0", res.PagesOK, res.Records, res.PagesErr)
+	}
+}
