@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/domidex01/magpie/extract"
-	"github.com/domidex01/magpie/selector"
+	"github.com/motherlodelab/magpie/extract"
+	"github.com/motherlodelab/magpie/selector"
 )
 
 // --- fakes (copied per package; rule-of-three, no testutil) ---

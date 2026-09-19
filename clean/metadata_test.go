@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/domidex01/magpie/clean"
+	"github.com/motherlodelab/magpie/clean"
 )
 
 func TestMetadata_Article(t *testing.T) {

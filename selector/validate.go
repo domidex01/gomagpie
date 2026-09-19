@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/domidex01/magpie/extract"
+	"github.com/motherlodelab/magpie/extract"
 
 	"github.com/PuerkitoBio/goquery"
 )

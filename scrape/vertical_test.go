@@ -11,11 +11,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/domidex01/magpie/extract"
-	"github.com/domidex01/magpie/fetch"
-	"github.com/domidex01/magpie/scrape"
-	"github.com/domidex01/magpie/selector"
-	"github.com/domidex01/magpie/vertical"
+	"github.com/motherlodelab/magpie/extract"
+	"github.com/motherlodelab/magpie/fetch"
+	"github.com/motherlodelab/magpie/scrape"
+	"github.com/motherlodelab/magpie/selector"
+	"github.com/motherlodelab/magpie/vertical"
 )
 
 // fakeVerticalFetcher is the 15-line scrape-side copy of the vertical fake

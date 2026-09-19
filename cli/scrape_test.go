@@ -11,9 +11,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/domidex01/magpie/fetch"
-	"github.com/domidex01/magpie/scrape"
-	"github.com/domidex01/magpie/store"
+	"github.com/motherlodelab/magpie/fetch"
+	"github.com/motherlodelab/magpie/scrape"
+	"github.com/motherlodelab/magpie/store"
 )
 
 type fakeProvider struct {

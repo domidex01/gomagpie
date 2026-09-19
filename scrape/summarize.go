@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/domidex01/magpie/extract"
+	"github.com/motherlodelab/magpie/extract"
 )
 
 // MaxSummarizeInputWords caps the markdown fed to the prompt (cost bound).

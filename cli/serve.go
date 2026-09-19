@@ -7,11 +7,11 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/domidex01/magpie/config"
-	"github.com/domidex01/magpie/extract"
-	magpiemcp "github.com/domidex01/magpie/mcp"
-	"github.com/domidex01/magpie/scrape"
-	"github.com/domidex01/magpie/store"
+	"github.com/motherlodelab/magpie/config"
+	"github.com/motherlodelab/magpie/extract"
+	magpiemcp "github.com/motherlodelab/magpie/mcp"
+	"github.com/motherlodelab/magpie/scrape"
+	"github.com/motherlodelab/magpie/store"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/domidex01/magpie/fetch"
+	"github.com/motherlodelab/magpie/fetch"
 
 	"github.com/cenkalti/backoff/v5"
 )

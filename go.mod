@@ -1,4 +1,4 @@
-module github.com/domidex01/magpie
+module github.com/motherlodelab/magpie
 
 go 1.26.5
 

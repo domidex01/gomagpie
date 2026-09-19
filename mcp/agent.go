@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/domidex01/magpie/clean"
-	"github.com/domidex01/magpie/crawl"
-	"github.com/domidex01/magpie/scrape"
-	"github.com/domidex01/magpie/vertical"
+	"github.com/motherlodelab/magpie/clean"
+	"github.com/motherlodelab/magpie/crawl"
+	"github.com/motherlodelab/magpie/scrape"
+	"github.com/motherlodelab/magpie/vertical"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )

@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/domidex01/magpie/clean"
+	"github.com/motherlodelab/magpie/clean"
 )
 
 // ChallengeError is the typed challenge failure. Edges match it with

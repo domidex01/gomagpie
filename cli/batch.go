@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/domidex01/magpie/clean"
-	"github.com/domidex01/magpie/scrape"
+	"github.com/motherlodelab/magpie/clean"
+	"github.com/motherlodelab/magpie/scrape"
 
 	"github.com/spf13/cobra"
 )

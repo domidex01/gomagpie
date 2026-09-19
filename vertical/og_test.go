@@ -3,7 +3,7 @@ package vertical_test
 import (
 	"testing"
 
-	"github.com/domidex01/magpie/vertical"
+	"github.com/motherlodelab/magpie/vertical"
 )
 
 // TestOG_NeverAutoFires — H.7 gate 3 (same-commit pin with the

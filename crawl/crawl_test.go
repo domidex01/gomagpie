@@ -22,11 +22,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/domidex01/magpie/core"
-	"github.com/domidex01/magpie/extract"
-	"github.com/domidex01/magpie/fetch"
-	"github.com/domidex01/magpie/selector"
-	"github.com/domidex01/magpie/store"
+	"github.com/motherlodelab/magpie/core"
+	"github.com/motherlodelab/magpie/extract"
+	"github.com/motherlodelab/magpie/fetch"
+	"github.com/motherlodelab/magpie/selector"
+	"github.com/motherlodelab/magpie/store"
 )
 
 // selectorHash mirrors production's schemaHash for cache assertions.

@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"runtime"
 
-	"github.com/domidex01/magpie/clean"
-	"github.com/domidex01/magpie/fetch"
+	"github.com/motherlodelab/magpie/clean"
+	"github.com/motherlodelab/magpie/fetch"
 
 	"golang.org/x/sync/errgroup"
 )

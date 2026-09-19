@@ -3,8 +3,8 @@ package scrape
 import (
 	"context"
 
-	"github.com/domidex01/magpie/clean"
-	"github.com/domidex01/magpie/fetch"
+	"github.com/motherlodelab/magpie/clean"
+	"github.com/motherlodelab/magpie/fetch"
 )
 
 // BrandResult is one brand extraction: page identity plus the zero-LLM

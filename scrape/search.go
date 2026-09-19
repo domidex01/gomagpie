@@ -21,7 +21,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"github.com/domidex01/magpie/fetch"
+	"github.com/motherlodelab/magpie/fetch"
 )
 
 // SearchHit is one SERP result.

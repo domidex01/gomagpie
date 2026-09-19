@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/domidex01/magpie/config"
-	"github.com/domidex01/magpie/crawl"
-	"github.com/domidex01/magpie/extract"
-	"github.com/domidex01/magpie/fetch"
-	"github.com/domidex01/magpie/scrape"
-	"github.com/domidex01/magpie/store"
+	"github.com/motherlodelab/magpie/config"
+	"github.com/motherlodelab/magpie/crawl"
+	"github.com/motherlodelab/magpie/extract"
+	"github.com/motherlodelab/magpie/fetch"
+	"github.com/motherlodelab/magpie/scrape"
+	"github.com/motherlodelab/magpie/store"
 )
 
 // ProviderHelp is the single home for the --provider value list, shared by

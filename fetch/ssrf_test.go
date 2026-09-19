@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/domidex01/magpie/fetch"
+	"github.com/motherlodelab/magpie/fetch"
 )
 
 // TestSecurityFilesUseExplicitOptions bolts the test-binary hatch shut:

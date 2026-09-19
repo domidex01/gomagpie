@@ -15,12 +15,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/domidex01/magpie/extract"
-	"github.com/domidex01/magpie/fetch"
-	magpiemcp "github.com/domidex01/magpie/mcp"
-	"github.com/domidex01/magpie/scrape"
-	"github.com/domidex01/magpie/selector"
-	"github.com/domidex01/magpie/store"
+	"github.com/motherlodelab/magpie/extract"
+	"github.com/motherlodelab/magpie/fetch"
+	magpiemcp "github.com/motherlodelab/magpie/mcp"
+	"github.com/motherlodelab/magpie/scrape"
+	"github.com/motherlodelab/magpie/selector"
+	"github.com/motherlodelab/magpie/store"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"

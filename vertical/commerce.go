@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/domidex01/magpie/clean"
+	"github.com/motherlodelab/magpie/clean"
 
 	"github.com/PuerkitoBio/goquery"
 )

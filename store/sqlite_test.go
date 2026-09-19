@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/domidex01/magpie/store"
+	"github.com/motherlodelab/magpie/store"
 )
 
 func openTempDB(t *testing.T) *store.DB {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/domidex01/magpie/clean"
+	"github.com/motherlodelab/magpie/clean"
 
 	"golang.org/x/sync/errgroup"
 )

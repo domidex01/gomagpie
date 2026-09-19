@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/domidex01/magpie/fetch"
+	"github.com/motherlodelab/magpie/fetch"
 )
 
 // WatchResult is one watch check. WebhookStatus: "" (not fired —

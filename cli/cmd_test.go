@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/domidex01/magpie/config"
+	"github.com/motherlodelab/magpie/config"
 
 	"github.com/spf13/cobra"
 )

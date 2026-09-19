@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/domidex01/magpie/vertical"
+	"github.com/motherlodelab/magpie/vertical"
 )
 
 func TestCommerceMatch_OptInPositives(t *testing.T) {

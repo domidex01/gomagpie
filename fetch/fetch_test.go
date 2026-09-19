@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/domidex01/magpie/fetch"
+	"github.com/motherlodelab/magpie/fetch"
 )
 
 func newFakeOrigin(t *testing.T, mux *http.ServeMux) string {

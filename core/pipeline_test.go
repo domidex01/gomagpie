@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/domidex01/magpie/clean"
-	"github.com/domidex01/magpie/core"
-	"github.com/domidex01/magpie/fetch"
+	"github.com/motherlodelab/magpie/clean"
+	"github.com/motherlodelab/magpie/core"
+	"github.com/motherlodelab/magpie/fetch"
 )
 
 func TestPipelineOrdersAndDrains(t *testing.T) {

@@ -19,7 +19,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/domidex01/magpie/store"
+	"github.com/motherlodelab/magpie/store"
 )
 
 // The external scrape_test helpers are not visible from this internal

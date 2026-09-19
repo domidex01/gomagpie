@@ -8,13 +8,13 @@ import (
 	"os/signal"
 	"strings"
 
-	"github.com/domidex01/magpie/crawl"
-	"github.com/domidex01/magpie/extract"
-	"github.com/domidex01/magpie/fetch"
-	pluginExec "github.com/domidex01/magpie/plugin/exec"
-	"github.com/domidex01/magpie/scrape"
-	"github.com/domidex01/magpie/selector"
-	"github.com/domidex01/magpie/store"
+	"github.com/motherlodelab/magpie/crawl"
+	"github.com/motherlodelab/magpie/extract"
+	"github.com/motherlodelab/magpie/fetch"
+	pluginExec "github.com/motherlodelab/magpie/plugin/exec"
+	"github.com/motherlodelab/magpie/scrape"
+	"github.com/motherlodelab/magpie/selector"
+	"github.com/motherlodelab/magpie/store"
 
 	"github.com/spf13/cobra"
 )

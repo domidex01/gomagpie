@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/domidex01/magpie/core"
+	"github.com/motherlodelab/magpie/core"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"

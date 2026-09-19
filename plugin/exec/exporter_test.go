@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	pluginExec "github.com/domidex01/magpie/plugin/exec"
+	pluginExec "github.com/motherlodelab/magpie/plugin/exec"
 )
 
 func TestHelperExporterProcess(t *testing.T) {

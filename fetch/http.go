@@ -25,7 +25,7 @@ type StaticFetcher struct {
 
 // defaultHeaders is the single static-fetch header bundle (spec §1.3).
 var defaultHeaders = map[string]string{
-	"User-Agent":      "github.com/domidex01/magpie/1.0 (+https://github.com/you/magpie)",
+	"User-Agent":      "github.com/motherlodelab/magpie/1.0 (+https://github.com/you/magpie)",
 	"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 	"Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
 }

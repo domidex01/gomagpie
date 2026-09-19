@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/domidex01/magpie/crawl"
+	"github.com/motherlodelab/magpie/crawl"
 
 	"github.com/spf13/cobra"
 )

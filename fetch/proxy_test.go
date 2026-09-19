@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/domidex01/magpie/crawl"
-	"github.com/domidex01/magpie/fetch"
+	"github.com/motherlodelab/magpie/crawl"
+	"github.com/motherlodelab/magpie/fetch"
 )
 
 // newClosedPort returns a 127.0.0.1 host:port that reliably refuses

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/domidex01/magpie/clean"
+	"github.com/motherlodelab/magpie/clean"
 )
 
 var llmFixtures = []string{"article", "product", "spa-shell"}

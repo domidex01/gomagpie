@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/domidex01/magpie/fetch"
+	"github.com/motherlodelab/magpie/fetch"
 )
 
 // TestScreenshotActions_MidFlow: the screenshot verb writes a PNG with

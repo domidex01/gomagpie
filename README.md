@@ -56,7 +56,7 @@ scoped crawling · zero-LLM verticals · 12-tool MCP server · WASM plugins.
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/domidex01/magpie.git
+   git clone https://github.com/motherlodelab/magpie.git
    cd magpie
    ```
 

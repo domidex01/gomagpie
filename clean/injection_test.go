@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/domidex01/magpie/clean"
+	"github.com/motherlodelab/magpie/clean"
 )
 
 // TestInjection_Stripped — US-1: every hidden vector is absent from BOTH
