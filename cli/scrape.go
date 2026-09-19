@@ -25,6 +25,8 @@ func newScrapeCmd() *cobra.Command {
 	var verticalName string
 	var actionLines []string
 	var actionsFile, lang string
+	var captureXHR []string
+	var cdpURL string
 	cmd := &cobra.Command{
 		Use:   "scrape <url>",
 		Short: "Fetch → clean → extract a single URL",
@@ -48,6 +50,7 @@ func newScrapeCmd() *cobra.Command {
 				OnlyMainContent: onlyMainContent, HeaderProfile: headerProfile, Cookies: cookies,
 				Browser: browser, Vertical: verticalName, Viewport: viewport,
 				Actions: actions, Lang: lang,
+				CaptureXHR: captureXHR, CDP: cdpURL,
 			})
 		},
 	}
@@ -70,6 +73,8 @@ func newScrapeCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&actionLines, "action", nil, "browser action line, repeatable: click <sel> | type <sel> <text…> | scroll <n|top|bottom> | wait <ms> | wait-for <sel> | screenshot <path> | eval-js <expr…>")
 	cmd.Flags().StringVar(&actionsFile, "actions", "", "action file: one action per line, # comments, rest-of-line args need no quoting")
 	cmd.Flags().StringVar(&lang, "lang", "", "Accept-Language header value, e.g. fr-CA,fr;q=0.9 (no control characters)")
+	cmd.Flags().StringSliceVar(&captureXHR, "capture-xhr", nil, "Go regexp: capture matching XHR/fetch response bodies (repeatable; browser rendering only)")
+	cmd.Flags().StringVar(&cdpURL, "cdp-url", "", "remote browser CDP endpoint (ws://, wss://, http(s)://); overrides MAGPIE_CDP_URL — never launches a local browser")
 	return cmd
 }
 
@@ -108,6 +113,10 @@ type scrapeOptions struct {
 	// the Accept-Language override; both validated pre-I/O by scrape.
 	Actions []string
 	Lang    string
+	// CaptureXHR patterns and CDP endpoint; both validated pre-I/O by
+	// scrape.ValidateOptions (render=static + capture-xhr rejected).
+	CaptureXHR []string
+	CDP        string
 }
 
 func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
@@ -133,6 +142,7 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		Render: cfg.Render, PageFormat: o.PageFormat,
 		Browser: o.Browser, Vertical: o.Vertical,
 		Actions: o.Actions, Lang: o.Lang,
+		CaptureXHR: o.CaptureXHR, CDP: o.CDP,
 	}); err != nil {
 		return err
 	}
@@ -168,6 +178,7 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		Profile:    o.HeaderProfile, Cookies: o.Cookies, Browser: o.Browser,
 		Vertical: o.Vertical, Viewport: o.Viewport,
 		Actions: o.Actions, Lang: o.Lang,
+		CaptureXHR: o.CaptureXHR, CDP: o.CDP,
 	})
 	if err != nil {
 		return keyHint(err) // exitFor owns the code mapping
@@ -201,7 +212,19 @@ func runScrape(ctx context.Context, rawURL string, o scrapeOptions) error {
 		// them, so falling through would silently drop the requested
 		// content (the screenshot-drop bug, again).
 		switch o.PageFormat {
-		case "json", "llm", "text", "html", "raw":
+		case "json":
+			// XHR captures ride the json envelope when present; output
+			// stays byte-identical when --capture-xhr is absent (Phase-G
+			// lesson: one cohesive block per output contract).
+			if len(res.XHR) > 0 {
+				doc, merr := xhrJSONEnvelope(res.Rendered, res.XHR)
+				if merr != nil {
+					return merr
+				}
+				return writeOut(cfg.Out, doc)
+			}
+			return writeOut(cfg.Out, res.Rendered)
+		case "llm", "text", "html", "raw":
 			return writeOut(cfg.Out, res.Rendered)
 		}
 		mdoc, merr := markdownDoc(res)
@@ -247,7 +270,28 @@ func markdownDoc(r scrape.Result) (string, error) {
 	return marshalOut(markdownOut{
 		URL: r.URL, FinalURL: r.FinalURL, Title: r.Title,
 		Markdown: r.Markdown, StructuredData: orEmpty(r.StructuredData),
+		XHR: r.XHR,
 	}, "scrape")
+}
+
+// xhrJSONEnvelope injects captured XHR bodies into the page-format json
+// envelope (same keys + xhr; only called when captures exist).
+func xhrJSONEnvelope(rendered string, xhr []fetch.XHRCapture) (string, error) {
+	// UseNumber keeps the page JSON's number literals verbatim on the
+	// re-marshal — plain Unmarshal makes every number a float64 and
+	// silently rounds IDs above 2^53 (the data this flag exists to fetch).
+	dec := json.NewDecoder(strings.NewReader(rendered))
+	dec.UseNumber()
+	var env map[string]any
+	if err := dec.Decode(&env); err != nil {
+		return "", fmt.Errorf("xhr envelope: %w", err)
+	}
+	env["xhr"] = xhr
+	b, err := json.MarshalIndent(env, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 func extractedDoc(r scrape.Result) (string, error) {

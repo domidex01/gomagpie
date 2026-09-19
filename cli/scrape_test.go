@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"magpie/fetch"
 	"magpie/scrape"
 	"magpie/store"
 )
@@ -446,5 +447,116 @@ func TestScrape_PageFormatRawAndHTML(t *testing.T) {
 	htmlOut := mustRead(t, out)
 	if len(htmlOut) == 0 || !strings.Contains(string(htmlOut), "<") {
 		t.Errorf("html output empty or not markup (%d bytes)", len(htmlOut))
+	}
+}
+
+// TestScrape_XHREnvelope — Phase J: the markdown envelope carries the
+// xhr array only when captures exist (additive-omitempty: existing
+// envelopes byte-identical). Constructed Result — the envelope function
+// IS the output contract; no fetcher fake behind it (screenshotDoc
+// precedent).
+func TestScrape_XHREnvelope(t *testing.T) {
+	canned := []fetch.XHRCapture{{
+		URL: "https://x/api/data", Status: 200,
+		MIMEType: "application/json", Body: `{"ok":true}`,
+	}}
+	doc, err := markdownDoc(scrape.Result{URL: "https://x", FinalURL: "https://x", Title: "t", XHR: canned})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env struct {
+		URL string             `json:"url"`
+		XHR []fetch.XHRCapture `json:"xhr"`
+	}
+	if err := json.Unmarshal([]byte(doc), &env); err != nil {
+		t.Fatalf("envelope not JSON: %v", doc)
+	}
+	if len(env.XHR) != 1 || env.XHR[0].URL != "https://x/api/data" ||
+		env.XHR[0].Status != 200 || env.XHR[0].MIMEType != "application/json" ||
+		env.XHR[0].Body != `{"ok":true}` {
+		t.Errorf("xhr = %+v, want the canned capture intact", env.XHR)
+	}
+
+	// nil XHR → no xhr key at all (additiveness: no envelope drift).
+	doc, err = markdownDoc(scrape.Result{URL: "https://x", FinalURL: "https://x", Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(doc), &raw); err != nil {
+		t.Fatalf("envelope not JSON: %v", doc)
+	}
+	if _, present := raw["xhr"]; present {
+		t.Error("nil XHR must omit the xhr key entirely")
+	}
+}
+
+// TestScrape_XHRJSONEnvelope — the page-format json path re-marshals the
+// page's own JSON to inject the xhr array; UseNumber must keep the
+// original number literals verbatim (plain Unmarshal rounds through
+// float64, silently corrupting IDs above 2^53).
+func TestScrape_XHRJSONEnvelope(t *testing.T) {
+	rendered := `{"id":9007199254740993,"ok":true,"ts":1735689600000}`
+	doc, err := xhrJSONEnvelope(rendered, []fetch.XHRCapture{{URL: "https://x/api", Status: 200}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(doc, "9007199254740993") {
+		t.Errorf("big int corrupted by float64 round-trip:\n%s", doc)
+	}
+	if !strings.Contains(doc, `"xhr"`) {
+		t.Error("xhr key missing from envelope")
+	}
+}
+
+// TestScrape_BadCDPExit2 — --cdp-url with a bad scheme is rejected
+// pre-I/O (exit 2): the target is a nonexistent file, so any fetch would
+// exit differently — exit 2 proves validation ran first.
+func TestScrape_BadCDPExit2(t *testing.T) {
+	testEnv(t, "cache.db")
+	err := runScrape(t.Context(), "file:///nonexistent-cdp-probe.html", scrapeOptions{Format: "json", CDP: "ftp://b:9222"})
+	if codeOf(err) != 2 {
+		t.Fatalf("exit = %d, want 2 (err=%v)", codeOf(err), err)
+	}
+	if strings.Contains(err.Error(), "user:pass") {
+		t.Errorf("error leaks credentials: %v", err)
+	}
+}
+
+// TestScrape_BadCaptureXHRExit2 — an invalid capture regexp is a usage
+// error before any I/O.
+func TestScrape_BadCaptureXHRExit2(t *testing.T) {
+	testEnv(t, "cache.db")
+	err := runScrape(t.Context(), "file:///nonexistent-xhr-probe.html", scrapeOptions{Format: "json", CaptureXHR: []string{"[bad"}})
+	if codeOf(err) != 2 {
+		t.Fatalf("exit = %d, want 2 (err=%v)", codeOf(err), err)
+	}
+}
+
+// TestXHREnvelope_Injection — page-format json + captures: same envelope
+// keys plus xhr; the rendered JSON shape is untouched otherwise.
+func TestXHREnvelope_Injection(t *testing.T) {
+	rendered := `{
+  "url": "https://x",
+  "markdown": "md"
+}`
+	canned := []fetch.XHRCapture{{URL: "https://x/api", Status: 200, Body: "1"}}
+	doc, err := xhrJSONEnvelope(rendered, canned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal([]byte(doc), &env); err != nil {
+		t.Fatalf("not JSON: %v", doc)
+	}
+	if env["url"] != "https://x" || env["markdown"] != "md" {
+		t.Errorf("original keys lost: %v", env)
+	}
+	xhrs, ok := env["xhr"].([]any)
+	if !ok || len(xhrs) != 1 {
+		t.Fatalf("xhr = %#v, want one capture", env["xhr"])
+	}
+	if first := xhrs[0].(map[string]any); first["url"] != "https://x/api" || first["status"] != float64(200) {
+		t.Errorf("capture = %v, want the canned capture", first)
 	}
 }

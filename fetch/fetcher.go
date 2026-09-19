@@ -17,6 +17,10 @@ type FetchRequest struct {
 	// policing — validation rejects control characters at the options
 	// boundary). Rod sets it as a page-level extra header.
 	Lang string
+	// CaptureXHR lists Go regexps; matching XHR/fetch response bodies are
+	// captured into FetchResponse.XHR. Rod-only: static fetchers ignore
+	// this (CLI/MCP reject the combination at the options boundary).
+	CaptureXHR []string
 }
 
 // FetchResponse is the fetched page.
@@ -31,6 +35,10 @@ type FetchResponse struct {
 	// request (and per redirect hop), so this is the entry that served
 	// the final hop — a rotation audit trail it is not.
 	Proxy string
+	// XHR carries captured XHR/fetch response bodies (rod-only; nil on
+	// the static path). Additive + omitempty: existing envelopes and
+	// goldens never drift.
+	XHR []XHRCapture
 }
 
 // Fetcher fetches one URL. Rod lives behind this interface.

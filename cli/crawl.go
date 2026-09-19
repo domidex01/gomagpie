@@ -26,7 +26,7 @@ func newCrawlCmd() *cobra.Command {
 	var provider, model, exporterCmd string
 	var pathPrefix string
 	var include, exclude []string
-	var allowSubdomains, noSitemap bool
+	var allowSubdomains, noSitemap, sitemapOnly, autoThrottle bool
 	var browser, lang string
 	cmd := &cobra.Command{
 		Use:   "crawl <url>",
@@ -54,7 +54,7 @@ func newCrawlCmd() *cobra.Command {
 				Provider: provider, Model: model, ExporterCmd: exporterCmd,
 				PathPrefix: pathPrefix, Include: include, Exclude: exclude,
 				AllowSubdomains: allowSubdomains, NoSitemap: noSitemap, Browser: browser,
-				Lang: lang,
+				Lang: lang, SitemapOnly: sitemapOnly, AutoThrottle: autoThrottle,
 			})
 		},
 	}
@@ -71,6 +71,8 @@ func newCrawlCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "comma-separated URL globs to exclude (wins over --include)")
 	cmd.Flags().BoolVar(&allowSubdomains, "allow-subdomains", false, "follow links into subdomains of the seed host")
 	cmd.Flags().BoolVar(&noSitemap, "no-sitemap", false, "skip sitemap seed expansion")
+	cmd.Flags().BoolVar(&sitemapOnly, "sitemap-only", false, "frontier = sitemap URLs only (no seed enqueue, no link-following); contradicts --no-sitemap")
+	cmd.Flags().BoolVar(&autoThrottle, "auto-throttle", false, "adaptive per-host pacing: back off ×2 on 429/5xx, decay on success (static path only)")
 	cmd.Flags().StringVar(&browser, "browser", "", "TLS-impersonating browser fingerprint: "+fetch.BrowserHelp)
 	cmd.Flags().StringVar(&lang, "lang", "", "Accept-Language header value, e.g. fr-CA,fr;q=0.9 (no control characters)")
 	cmd.Flags().StringVar(&status, "status", "", "print a run's status row + pending/inflight/done/errors counts instead of crawling")
@@ -103,6 +105,8 @@ type crawlCLIOptions struct {
 	Exclude         []string
 	AllowSubdomains bool
 	NoSitemap       bool
+	SitemapOnly     bool
+	AutoThrottle    bool
 	Browser         string
 	Lang            string
 }
@@ -176,6 +180,10 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	case "jsonl", "json", "csv", "sqlite":
 	default:
 		return fail(2, "crawl: --format must be jsonl|json|csv|sqlite")
+	}
+	// Pure option contradiction: fails before credential resolution.
+	if err := crawl.ValidateSitemapOnly(o.SitemapOnly, o.NoSitemap); err != nil {
+		return fail(2, "%v", err)
 	}
 	provider := cfg.ExtractProvider
 	if o.Provider != "" {
@@ -281,6 +289,7 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		SameHost: o.SameHost, FetchWorkers: o.Concurrency, Rate: o.Rate,
 		PathPrefix: o.PathPrefix, Include: o.Include, Exclude: o.Exclude,
 		AllowSubdomains: o.AllowSubdomains, NoSitemap: o.NoSitemap,
+		SitemapOnly: o.SitemapOnly, AutoThrottle: o.AutoThrottle,
 		Format: cfg.Format, Out: cfg.Out, RunID: runID,
 		Resume: resuming, ResumeID: o.Resume, IgnoreRobots: o.IgnoreRobots,
 		Browser: o.Browser, Lang: o.Lang,

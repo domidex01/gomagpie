@@ -137,6 +137,8 @@ magpie scrape https://example.com/docs --include '.main,.content' --exclude 'nav
 | `--viewport` | `WxH`, e.g. `1280x800` | Screenshot page size (page-format screenshot only) |
 | `--action` | DSL line (repeatable, see [Actions DSL](#actions-dsl)) | Browser interaction executed by rod before capture |
 | `--actions` | path | Action file: one action per line, `#` comments (file lines run first) |
+| `--capture-xhr` | Go regexp (repeatable) | Capture XHR/fetch response bodies the page loads into the `xhr` envelope array (caps: 50 × 64 KiB, truncated past cap; browser rendering only) |
+| `--cdp-url` | `ws://`, `wss://`, `http(s)://` endpoint | Drive a remote/already-running browser over CDP instead of launching one (no local download; overrides `MAGPIE_CDP_URL`; userinfo is redacted from errors) |
 | `--lang` | e.g. `fr-CA,fr;q=0.9` | Accept-Language header value (overrides the profile bundle; no control characters) |
 | `--provider` / `--model` | see [Providers](#providers) | LLM provider + model for `--schema` extraction |
 | `--format` | `json\|jsonl` (default json) | Envelope format |
@@ -330,6 +332,8 @@ magpie crawl --status <run_id>
 | `--path-prefix` | e.g. `/docs` | Only follow links under this prefix |
 | `--include` / `--exclude` | URL globs (`**` crosses `/`, `*` stays in one segment) | Scope filter; exclude wins |
 | `--no-sitemap` | flag | Skip sitemap seed expansion |
+| `--sitemap-only` | flag | Frontier = sitemap URLs only: no seed enqueue, no link-following; zero in-scope URLs exits 3; contradicts `--no-sitemap` (exit 2) |
+| `--auto-throttle` | flag | Adaptive per-host pacing: delay ×2 on 429/5xx (cap 60s, `Retry-After` wins up to 5m), decay ×¾ on success toward the configured rate / crawl-delay floor (static fetch path only) |
 | `--ignore-robots` | flag | Fetch despite robots.txt (prints a warning) |
 | `--browser` | fingerprint (see scrape) | TLS impersonation for all fetches |
 | `--lang` | e.g. `fr-CA,fr;q=0.9` | Accept-Language header value for all fetches |
@@ -446,6 +450,7 @@ Shell completion: `magpie completion bash|zsh|fish|powershell`.
 | `MAGPIE_PROXY_FILE` | Proxy pool file (wins over `MAGPIE_PROXY`) |
 | `MAGPIE_PROXY_STRATEGY` | `round-robin` (default) or `sticky-host` |
 | `MAGPIE_SEARXNG_URL` | Self-hosted SearXNG instance (localhost/LAN allowed) |
+| `MAGPIE_CDP_URL` | Remote browser CDP endpoint (`ws://`, `wss://`, `http(s)://`); `--cdp-url` wins when both are set |
 | `MAGPIE_ALLOW_FILE=1` | Allow `file://` URLs (otherwise exit 2) |
 | `MAGPIE_STRICT_SSRF` | Stricter SSRF posture when set |
 | Standard `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Honored unless the MAGPIE proxy settings override/bypass |
@@ -539,6 +544,18 @@ Every fetch (static, robots, crawl) goes through one guarded transport:
 - **Run telemetry:** `run_history` rows accumulate `fetch_pages`,
   `fetch_bytes`, and `fetch_ms` next to LLM tokens/cost; databases created
   before Phase D gain the columns automatically on open.
+- **Prompt-injection stripping (default-on):** hidden text — inline styles
+  `display:none` / `visibility:hidden` / `font-size:0` / `opacity:0`, the
+  `hidden` attribute, and HTML comments — is stripped from every cleaned
+  page before any consumer (LLM extraction, markdown, MCP) sees it. Invisible
+  text is the classic LLM-agent injection vector; a page cannot hijack your
+  agent through markup you never saw. `aria-hidden` and computed styles are
+  deliberately out (precision); the only escape hatch is `--page-format raw`.
+- **Remote browser (`--cdp-url` / `MAGPIE_CDP_URL`):** point scrape (browser
+  fetches and screenshots) at a running Chrome/Chromium via CDP instead of
+  launching one — farms and containers never pay the local download. Scheme
+  must be `ws`/`wss`/`http(s)` (validated pre-I/O); endpoint credentials
+  never appear in errors.
 
 ### TLS impersonation
 

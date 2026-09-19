@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -67,8 +68,8 @@ func classify(resp *fetch.FetchResponse, err error) error {
 	case 400, 401, 403, 404, 410:
 		return backoff.Permanent(fmt.Errorf("crawl: fetch HTTP %d", resp.StatusCode))
 	case 429, 503:
-		if secs, perr := strconv.Atoi(resp.Headers.Get("Retry-After")); perr == nil {
-			return backoff.RetryAfter(secs)
+		if d, ok := retryAfterOf(resp.Headers); ok {
+			return backoff.RetryAfter(int(d / time.Second))
 		}
 		return fmt.Errorf("crawl: fetch HTTP %d", resp.StatusCode)
 	case 408, 500, 502, 504:
@@ -78,4 +79,16 @@ func classify(resp *fetch.FetchResponse, err error) error {
 		return nil
 	}
 	return fmt.Errorf("crawl: fetch HTTP %d", resp.StatusCode)
+}
+
+// retryAfterOf parses an integer-seconds Retry-After header; ok=false
+// when absent or unparseable (HTTP-date form is ignored — classify's
+// long-standing contract). Shared by classify and AutoThrottle's Report
+// wiring — one parser, no drift.
+func retryAfterOf(h http.Header) (time.Duration, bool) {
+	secs, err := strconv.Atoi(h.Get("Retry-After"))
+	if err != nil {
+		return 0, false
+	}
+	return time.Duration(secs) * time.Second, true
 }
