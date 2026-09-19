@@ -491,6 +491,24 @@ func TestScrape_XHREnvelope(t *testing.T) {
 	}
 }
 
+// TestScrape_XHRJSONEnvelope — the page-format json path re-marshals the
+// page's own JSON to inject the xhr array; UseNumber must keep the
+// original number literals verbatim (plain Unmarshal rounds through
+// float64, silently corrupting IDs above 2^53).
+func TestScrape_XHRJSONEnvelope(t *testing.T) {
+	rendered := `{"id":9007199254740993,"ok":true,"ts":1735689600000}`
+	doc, err := xhrJSONEnvelope(rendered, []fetch.XHRCapture{{URL: "https://x/api", Status: 200}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(doc, "9007199254740993") {
+		t.Errorf("big int corrupted by float64 round-trip:\n%s", doc)
+	}
+	if !strings.Contains(doc, `"xhr"`) {
+		t.Error("xhr key missing from envelope")
+	}
+}
+
 // TestScrape_BadCDPExit2 — --cdp-url with a bad scheme is rejected
 // pre-I/O (exit 2): the target is a nonexistent file, so any fetch would
 // exit differently — exit 2 proves validation ran first.

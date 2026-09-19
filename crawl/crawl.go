@@ -445,18 +445,20 @@ func (c *crawlContext) finish(ctx context.Context, w *writer, sinkErr error, pum
 }
 
 func (c *crawlContext) fetchPage(ctx context.Context, task core.FetchTask) (core.FetchedPage, error) {
+	// hostOf's error only ever means "no usable host" (host == ""):
+	// unparsable URL or missing host — such tasks skip pacing and get
+	// classified below like any other fetch.
+	host, _ := hostOf(task.URL) //nolint:errcheck // "" covers both error and empty-host
 	if isHTTP(task.URL) && !c.opts.IgnoreRobots {
 		allowed, err := c.checker.Allowed(ctx, task.URL)
 		if err != nil || !allowed {
 			return core.FetchedPage{Task: task, Err: fmt.Errorf("crawl: robots disallow %s", task.URL)}, nil
 		}
-		if d := c.checker.CrawlDelay(ctx, task.URL); d > 0 {
-			if host, herr := hostOf(task.URL); herr == nil && host != "" {
-				c.limiters.SetFloor(host, d)
-			}
+		if d := c.checker.CrawlDelay(ctx, task.URL); d > 0 && host != "" {
+			c.limiters.SetFloor(host, d)
 		}
 	}
-	if host, herr := hostOf(task.URL); herr == nil && host != "" {
+	if host != "" {
 		if err := c.limiters.Wait(ctx, host); err != nil {
 			return core.FetchedPage{}, err
 		}
@@ -473,11 +475,9 @@ func (c *crawlContext) fetchPage(ctx context.Context, task core.FetchTask) (core
 		// would see only final 200s and the backoff would be dead code.
 		// The rod-escalation branch below never Reports — AutoThrottle
 		// adapts on the static path only (rare escalation path).
-		if c.opts.AutoThrottle && r != nil {
-			if host, herr := hostOf(task.URL); herr == nil && host != "" {
-				ra, _ := retryAfterOf(r.Headers)
-				c.limiters.Report(host, r.StatusCode, ra)
-			}
+		if c.opts.AutoThrottle && r != nil && host != "" {
+			ra, _ := retryAfterOf(r.Headers)
+			c.limiters.Report(host, r.StatusCode, ra)
 		}
 		return r, ferr
 	})

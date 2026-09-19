@@ -57,7 +57,7 @@ func (r *RodFetcher) ensureBrowser() error {
 		r.browser = rod.New().ControlURL(r.CDP)
 		if err := r.browser.Connect(); err != nil {
 			r.browser = nil // never-connected: Close() must stay a no-op
-			return fmt.Errorf("fetch: connect remote browser %s: %w", redactCDP(r.CDP), err)
+			return fmt.Errorf("fetch: connect remote browser %s: %w", RedactCDP(r.CDP), err)
 		}
 		return nil
 	}
@@ -85,10 +85,12 @@ func (r *RodFetcher) Screenshot(ctx context.Context, rawURL string, width, heigh
 	return r.screenshot(ctx, rawURL, width, height, nil)
 }
 
-// redactCDP renders a CDP endpoint without userinfo — credentials never
+// RedactCDP renders a CDP endpoint without userinfo — credentials never
 // appear in errors (RedactProxy's rule, different shape: the scheme and
-// path are operationally useful for a browser endpoint).
-func redactCDP(raw string) string {
+// path are operationally useful for a browser endpoint). Unparseable or
+// host-less input renders as a fixed placeholder. Shared with scrape's
+// options validation — one redaction shape for CDP endpoints.
+func RedactCDP(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return "(cdp endpoint)"
@@ -101,5 +103,7 @@ func redactCDP(raw string) string {
 // ponytail: fresh browser per screenshot is the known ceiling; client
 // reuse is the upgrade path if MCP load ever demands it.
 func ScreenshotPage(ctx context.Context, rawURL string, width, height int) ([]byte, error) {
-	return ScreenshotActions(ctx, rawURL, width, height, nil)
+	r := NewRodFetcher()
+	defer func() { _ = r.Close() }() //nolint:errcheck // browser teardown; failure unactionable
+	return r.screenshot(ctx, rawURL, width, height, nil)
 }

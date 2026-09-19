@@ -136,7 +136,7 @@ func (r *RodFetcher) FetchWithActions(ctx context.Context, req FetchRequest, act
 		}
 		caps = &xhrCollector{patterns: patterns}
 	}
-	page, _, err := r.openPage(cctx, req, caps) // event consumer starts inside, pre-navigation
+	page, err := r.openPage(cctx, req, caps) // event consumer starts inside, pre-navigation
 	if err != nil {
 		return nil, err
 	}
@@ -170,30 +170,28 @@ func (r *RodFetcher) FetchWithActions(ctx context.Context, req FetchRequest, act
 
 // openPage creates the page, optionally sets the lang header, subscribes
 // XHR capture (between creation and navigation — early responses must be
-// seen), then navigates. Returns the page and the capture stop-func (nil
-// when caps is nil). One create-then-navigate shape for both lang paths:
-// the blank-page round trip is sub-ms next to the fixed 2s settle.
-func (r *RodFetcher) openPage(cctx context.Context, req FetchRequest, caps *xhrCollector) (*rod.Page, func(), error) {
+// seen), then navigates. One create-then-navigate shape for both lang
+// paths: the blank-page round trip is sub-ms next to the fixed 2s settle.
+func (r *RodFetcher) openPage(cctx context.Context, req FetchRequest, caps *xhrCollector) (*rod.Page, error) {
 	page, err := r.browser.Context(cctx).Page(proto.TargetCreateTarget{})
 	if err != nil {
-		return nil, nil, fmt.Errorf("fetch: open page: %w", err)
+		return nil, fmt.Errorf("fetch: open page: %w", err)
 	}
 	if req.Lang != "" {
 		if _, err := page.SetExtraHeaders([]string{"Accept-Language", req.Lang}); err != nil {
 			_ = page.Close() //nolint:errcheck // error path; teardown failure unactionable
-			return nil, nil, fmt.Errorf("fetch: set lang header: %w", err)
+			return nil, fmt.Errorf("fetch: set lang header: %w", err)
 		}
 	}
-	var wait func()
 	if caps != nil {
-		wait = caps.subscribe(page)
+		wait := caps.subscribe(page)
 		go wait() // push-consume network events until the page ctx dies (void callbacks never satisfy the loop)
 	}
 	if err := page.Navigate(req.URL); err != nil {
 		_ = page.Close() //nolint:errcheck // error path; teardown failure unactionable
-		return nil, nil, fmt.Errorf("fetch: navigate: %w", err)
+		return nil, fmt.Errorf("fetch: navigate: %w", err)
 	}
-	return page, wait, nil
+	return page, nil
 }
 
 // runActions executes action lines in order under the fetch budget.
@@ -273,7 +271,7 @@ func (r *RodFetcher) screenshot(ctx context.Context, rawURL string, width, heigh
 	}
 	cctx, cancel := context.WithTimeout(ctx, screenshotBudget)
 	defer cancel()
-	page, _, err := r.openPage(cctx, FetchRequest{URL: rawURL}, nil)
+	page, err := r.openPage(cctx, FetchRequest{URL: rawURL}, nil)
 	if err != nil {
 		return nil, err
 	}

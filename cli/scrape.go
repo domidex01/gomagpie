@@ -277,8 +277,13 @@ func markdownDoc(r scrape.Result) (string, error) {
 // xhrJSONEnvelope injects captured XHR bodies into the page-format json
 // envelope (same keys + xhr; only called when captures exist).
 func xhrJSONEnvelope(rendered string, xhr []fetch.XHRCapture) (string, error) {
+	// UseNumber keeps the page JSON's number literals verbatim on the
+	// re-marshal — plain Unmarshal makes every number a float64 and
+	// silently rounds IDs above 2^53 (the data this flag exists to fetch).
+	dec := json.NewDecoder(strings.NewReader(rendered))
+	dec.UseNumber()
 	var env map[string]any
-	if err := json.Unmarshal([]byte(rendered), &env); err != nil {
+	if err := dec.Decode(&env); err != nil {
 		return "", fmt.Errorf("xhr envelope: %w", err)
 	}
 	env["xhr"] = xhr

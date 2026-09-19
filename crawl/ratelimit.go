@@ -14,13 +14,18 @@ import (
 // same-request retries).
 type HostLimiters struct {
 	mu    sync.Mutex
-	m     map[string]*rate.Limiter
+	m     map[string]*hostState
 	rps   float64
 	burst int
 	auto  bool
-	// auto-only state: adaptive delay and crawl-delay floor per host.
-	delays map[string]time.Duration
-	floors map[string]time.Duration
+}
+
+// hostState is one host's bucket plus the auto-only adaptive state
+// (zero values fine: delay/floor are only read when auto is on).
+type hostState struct {
+	lim   *rate.Limiter
+	delay time.Duration // adaptive delay (Report writes, auto only)
+	floor time.Duration // crawl-delay decay floor (SetFloor records, auto only)
 }
 
 // NewHostLimiters builds limiters with the given per-host rate.
@@ -31,20 +36,25 @@ func NewHostLimiters(rps float64, burst int) *HostLimiters {
 	if burst <= 0 {
 		burst = 3
 	}
-	return &HostLimiters{m: map[string]*rate.Limiter{}, rps: rps, burst: burst,
-		delays: map[string]time.Duration{}, floors: map[string]time.Duration{}}
+	return &HostLimiters{m: map[string]*hostState{}, rps: rps, burst: burst}
+}
+
+// state returns the host's state, creating it on first use (caller holds mu).
+func (h *HostLimiters) state(host string) *hostState {
+	st, ok := h.m[host]
+	if !ok {
+		st = &hostState{lim: rate.NewLimiter(rate.Limit(h.rps), h.burst)}
+		h.m[host] = st
+	}
+	return st
 }
 
 // Wait blocks until the host bucket admits a request.
 func (h *HostLimiters) Wait(ctx context.Context, host string) error {
 	h.mu.Lock()
-	lim, ok := h.m[host]
-	if !ok {
-		lim = rate.NewLimiter(rate.Limit(h.rps), h.burst)
-		h.m[host] = lim
-	}
+	st := h.state(host)
 	h.mu.Unlock()
-	return lim.Wait(ctx) //nolint:wrapcheck // rate error is already contextual
+	return st.lim.Wait(ctx) //nolint:wrapcheck // rate error is already contextual
 }
 
 // SetFloor lowers the host rate to at most 1/d (crawl-delay); never raises.
@@ -57,16 +67,12 @@ func (h *HostLimiters) SetFloor(host string, d time.Duration) {
 	floor := rate.Every(d)
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	st := h.state(host)
 	if h.auto {
-		h.floors[host] = d
+		st.floor = d
 	}
-	lim, ok := h.m[host]
-	if !ok {
-		lim = rate.NewLimiter(rate.Limit(h.rps), h.burst)
-		h.m[host] = lim
-	}
-	if floor < lim.Limit() {
-		lim.SetLimit(floor)
+	if floor < st.lim.Limit() {
+		st.lim.SetLimit(floor)
 	}
 }
 
@@ -74,8 +80,8 @@ func (h *HostLimiters) SetFloor(host string, d time.Duration) {
 func (h *HostLimiters) Limit(host string) rate.Limit {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if lim, ok := h.m[host]; ok {
-		return lim.Limit()
+	if st, ok := h.m[host]; ok {
+		return st.lim.Limit()
 	}
 	return rate.Limit(h.rps)
 }
@@ -105,17 +111,13 @@ func (h *HostLimiters) Report(host string, code int, retryAfter time.Duration) {
 	if !h.auto {
 		return
 	}
-	lim, ok := h.m[host]
-	if !ok {
-		lim = rate.NewLimiter(rate.Limit(h.rps), h.burst)
-		h.m[host] = lim
-	}
+	st := h.state(host)
 	floor := time.Duration(float64(time.Second) / h.rps)
-	if f, ok := h.floors[host]; ok && f > floor {
-		floor = f
+	if st.floor > floor {
+		floor = st.floor
 	}
-	delay, ok := h.delays[host]
-	if !ok || delay < floor {
+	delay := st.delay
+	if delay < floor {
 		delay = floor // auto starts from the floored rate
 	}
 	switch {
@@ -135,6 +137,6 @@ func (h *HostLimiters) Report(host string, code int, retryAfter time.Duration) {
 	default:
 		return // 3xx / non-429 4xx: no block signal, no success signal
 	}
-	h.delays[host] = delay
-	lim.SetLimit(rate.Every(delay))
+	st.delay = delay
+	st.lim.SetLimit(rate.Every(delay))
 }

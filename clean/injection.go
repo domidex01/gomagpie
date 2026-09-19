@@ -59,7 +59,10 @@ func StripHidden(doc *goquery.Document) bool {
 // StripHiddenHTML parses, strips, and re-serializes. When nothing was
 // hidden the original string is returned untouched — byte-identical
 // output for clean pages. Parse/serialize hiccups also return the
-// original: a strip must never fail a page.
+// original: a strip must never fail a page. Empty output (every node was
+// hidden) is kept: an empty page is the honest result — the quality gate
+// flags it, whereas the original would re-keep exactly the hidden text
+// the strip exists to remove.
 func StripHiddenHTML(htmlStr string) string {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlStr))
 	if err != nil {
@@ -69,7 +72,7 @@ func StripHiddenHTML(htmlStr string) string {
 		return htmlStr
 	}
 	out, err := goquery.OuterHtml(doc.Children())
-	if err != nil || strings.TrimSpace(out) == "" {
+	if err != nil {
 		return htmlStr
 	}
 	return out

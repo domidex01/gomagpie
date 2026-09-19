@@ -1088,11 +1088,14 @@ func TestScrapeURL_CDPBadSchemeRejected(t *testing.T) {
 	}
 }
 
-// TestCrawlSite_FlexBoolParams — sitemap_only/auto_throttle coerce like
-// the house CrawlIn bools (string "true" and JSON true; absent = nil).
+// TestCrawlSite_FlexBoolParams — the CrawlIn bools coerce like the house
+// pattern (string "true" and JSON true; absent = nil). allow_subdomains/
+// no_sitemap are pinned here because their shadow decoding shipped BROKEN
+// (silently dropped pre-Phase-J) — without the pin the fix can regress
+// invisibly, which is exactly what happened to them the first time.
 func TestCrawlSite_FlexBoolParams(t *testing.T) {
 	var in magpiemcp.CrawlIn
-	if err := json.Unmarshal([]byte(`{"sitemap_only":"true","auto_throttle":true}`), &in); err != nil {
+	if err := json.Unmarshal([]byte(`{"sitemap_only":"true","auto_throttle":true,"allow_subdomains":"true","no_sitemap":true}`), &in); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if in.SitemapOnly == nil || !bool(*in.SitemapOnly) {
@@ -1100,6 +1103,12 @@ func TestCrawlSite_FlexBoolParams(t *testing.T) {
 	}
 	if in.AutoThrottle == nil || !bool(*in.AutoThrottle) {
 		t.Errorf("auto_throttle = %v, want true", in.AutoThrottle)
+	}
+	if in.AllowSubdomains == nil || !bool(*in.AllowSubdomains) {
+		t.Errorf("allow_subdomains = %v, want true (was silently dropped pre-Phase-J)", in.AllowSubdomains)
+	}
+	if in.NoSitemap == nil || !bool(*in.NoSitemap) {
+		t.Errorf("no_sitemap = %v, want true (was silently dropped pre-Phase-J)", in.NoSitemap)
 	}
 	var absent magpiemcp.CrawlIn
 	if err := json.Unmarshal([]byte(`{}`), &absent); err != nil {

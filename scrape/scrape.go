@@ -148,9 +148,9 @@ func ValidateOptions(o Options) error {
 		u, err := url.Parse(cdp)
 		switch {
 		case err != nil || u.Host == "":
-			return &OptionsError{fmt.Sprintf("scrape: cdp-url must be an absolute ws://, wss://, or http(s):// endpoint (got %s)", fetch.RedactProxy(u))}
+			return &OptionsError{fmt.Sprintf("scrape: cdp-url must be an absolute ws://, wss://, or http(s):// endpoint (got %s)", fetch.RedactCDP(cdp))}
 		case u.Scheme != "ws" && u.Scheme != "wss" && u.Scheme != "http" && u.Scheme != "https":
-			return &OptionsError{fmt.Sprintf("scrape: cdp-url scheme %q must be ws, wss, http, or https (%s)", u.Scheme, fetch.RedactProxy(u))}
+			return &OptionsError{fmt.Sprintf("scrape: cdp-url scheme %q must be ws, wss, http, or https (%s)", u.Scheme, fetch.RedactCDP(cdp))}
 		}
 	}
 	if o.Viewport != "" {
