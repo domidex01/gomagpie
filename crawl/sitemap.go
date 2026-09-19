@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"magpie/clean"
-	"magpie/fetch"
-	"magpie/vertical"
+	"github.com/domidex01/magpie/clean"
+	"github.com/domidex01/magpie/fetch"
+	"github.com/domidex01/magpie/vertical"
 
 	"github.com/jimsmart/grobotstxt"
 )

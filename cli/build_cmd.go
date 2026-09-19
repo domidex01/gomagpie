@@ -3,7 +3,7 @@ package cli
 import (
 	"strings"
 
-	"magpie/build"
+	"github.com/domidex01/magpie/build"
 
 	"github.com/spf13/cobra"
 )

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"magpie/fetch"
+	"github.com/domidex01/magpie/fetch"
 )
 
 // TestRod_CDPNoLocalLaunch — US-5: with CDP set, ensureBrowser must

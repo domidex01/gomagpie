@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/extract"
+	"github.com/domidex01/magpie/extract"
 )
 
 func schemaKeysAbsent(t *testing.T, body map[string]any, keys ...string) {

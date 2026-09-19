@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/clean"
+	"github.com/domidex01/magpie/clean"
 )
 
 func sidecarOf(t *testing.T, v any) json.RawMessage {

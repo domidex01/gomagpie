@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/config"
+	"github.com/domidex01/magpie/config"
 )
 
 func isolatedXDG(t *testing.T) string {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/clean"
+	"github.com/domidex01/magpie/clean"
 )
 
 var update = flag.Bool("update", false, "regenerate golden files")

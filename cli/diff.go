@@ -6,9 +6,9 @@ import (
 	"io"
 	"os"
 
-	"magpie/extract"
-	"magpie/scrape"
-	"magpie/store"
+	"github.com/domidex01/magpie/extract"
+	"github.com/domidex01/magpie/scrape"
+	"github.com/domidex01/magpie/store"
 
 	"github.com/spf13/cobra"
 )

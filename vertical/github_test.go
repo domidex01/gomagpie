@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/vertical"
+	"github.com/domidex01/magpie/vertical"
 )
 
 func TestGithubMatch_Table(t *testing.T) {

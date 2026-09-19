@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"magpie/store"
+	"github.com/domidex01/magpie/store"
 )
 
 // deadOrigin returns a URL whose port was closed after allocation — any

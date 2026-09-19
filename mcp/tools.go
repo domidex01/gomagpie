@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"magpie/clean"
-	"magpie/crawl"
-	"magpie/extract"
-	"magpie/fetch"
-	"magpie/scrape"
-	"magpie/selector"
-	"magpie/store"
+	"github.com/domidex01/magpie/clean"
+	"github.com/domidex01/magpie/crawl"
+	"github.com/domidex01/magpie/extract"
+	"github.com/domidex01/magpie/fetch"
+	"github.com/domidex01/magpie/scrape"
+	"github.com/domidex01/magpie/selector"
+	"github.com/domidex01/magpie/store"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )

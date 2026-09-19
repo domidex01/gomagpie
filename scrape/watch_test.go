@@ -17,10 +17,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"magpie/store"
+	"github.com/domidex01/magpie/store"
 
-	"magpie/fetch"
-	"magpie/scrape"
+	"github.com/domidex01/magpie/fetch"
+	"github.com/domidex01/magpie/scrape"
 )
 
 // webhookSink records POST bodies; the answer status is atomically

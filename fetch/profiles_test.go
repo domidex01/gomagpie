@@ -11,7 +11,7 @@ import (
 
 	impersonate "github.com/North-web-dev/impersonate-http"
 
-	"magpie/fetch"
+	"github.com/domidex01/magpie/fetch"
 )
 
 type challengeHits struct {
@@ -75,7 +75,7 @@ func fetchBody(t *testing.T, url string, req fetch.FetchRequest) string {
 func TestProfiles_Default(t *testing.T) {
 	srv := echoOrigin(t)
 	body := fetchBody(t, srv.URL, fetch.FetchRequest{})
-	if !strings.Contains(body, "magpie/1.0") {
+	if !strings.Contains(body, "github.com/domidex01/magpie/1.0") {
 		t.Errorf("default profile UA = %q, want magpie", body)
 	}
 }
@@ -85,7 +85,7 @@ func TestProfiles_UnknownFallsBack(t *testing.T) {
 	// "webkit" is not a profile (safari became one in Phase G) — unknown
 	// names must keep falling back to the default bundle.
 	body := fetchBody(t, srv.URL, fetch.FetchRequest{Profile: "webkit"})
-	if !strings.Contains(body, "magpie/1.0") {
+	if !strings.Contains(body, "github.com/domidex01/magpie/1.0") {
 		t.Errorf("unknown profile UA = %q, want default magpie", body)
 	}
 }

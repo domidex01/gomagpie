@@ -29,7 +29,7 @@ func renderMain(with []string) (string, error) {
 
 import (
 {{range .}}	_ "{{.}}"
-{{end}}	"magpie/cli"
+{{end}}	"github.com/domidex01/magpie/cli"
 	"os"
 )
 
@@ -78,7 +78,7 @@ func Build(ctx context.Context, o BuildOptions) error {
 	if err := run("go", "mod", "init", "magpie-custom"); err != nil {
 		return err
 	}
-	if err := run("go", "mod", "edit", "-require=magpie@v0.0.0", "-replace=magpie="+root); err != nil {
+	if err := run("go", "mod", "edit", "-require=github.com/domidex01/magpie@v0.0.0", "-replace=github.com/domidex01/magpie="+root); err != nil {
 		return err
 	}
 	for mod, path := range o.Replaces {
@@ -136,7 +136,7 @@ func magpieRoot(ctx context.Context) (string, error) {
 	if v := os.Getenv("MAGPIE_REPO_ROOT"); v != "" {
 		return v, nil
 	}
-	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Dir}}", "magpie")
+	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Dir}}", "github.com/domidex01/magpie")
 	if out, err := cmd.Output(); err == nil {
 		if dir := strings.TrimSpace(string(out)); dir != "" {
 			return dir, nil

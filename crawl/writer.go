@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"magpie/core"
-	"magpie/extract"
-	"magpie/store"
+	"github.com/domidex01/magpie/core"
+	"github.com/domidex01/magpie/extract"
+	"github.com/domidex01/magpie/store"
 )
 
 // writer serializes PageResults. jsonl streams; json buffers the full array

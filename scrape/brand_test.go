@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/clean"
-	"magpie/extract"
-	"magpie/scrape"
+	"github.com/domidex01/magpie/clean"
+	"github.com/domidex01/magpie/extract"
+	"github.com/domidex01/magpie/scrape"
 )
 
 func brandFixtureBytes(t *testing.T, name string) []byte {

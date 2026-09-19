@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"magpie/fetch"
+	"github.com/domidex01/magpie/fetch"
 )
 
 const (

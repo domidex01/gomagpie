@@ -14,7 +14,7 @@ import (
 
 	"github.com/jimsmart/grobotstxt"
 
-	"magpie/fetch"
+	"github.com/domidex01/magpie/fetch"
 )
 
 // ErrRobotsUnreachable marks a host whose robots.txt is 5xx or unfetchable.
@@ -36,7 +36,7 @@ type robotsEntry struct {
 	denyAll bool
 }
 
-const robotsUA = "magpie/1.0 (+https://github.com/you/magpie)"
+const robotsUA = "github.com/domidex01/magpie/1.0 (+https://github.com/you/magpie)"
 
 // NewChecker builds a Checker with the bare product token derived from the UA.
 // The client shares fetch.GuardedTransport: robots fetches honor

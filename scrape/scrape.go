@@ -17,13 +17,13 @@ import (
 	"time"
 	"unicode"
 
-	"magpie/clean"
-	"magpie/crawl"
-	"magpie/extract"
-	"magpie/fetch"
-	"magpie/selector"
-	"magpie/store"
-	"magpie/vertical"
+	"github.com/domidex01/magpie/clean"
+	"github.com/domidex01/magpie/crawl"
+	"github.com/domidex01/magpie/extract"
+	"github.com/domidex01/magpie/fetch"
+	"github.com/domidex01/magpie/selector"
+	"github.com/domidex01/magpie/store"
+	"github.com/domidex01/magpie/vertical"
 )
 
 // ErrMissingKey marks a schema extraction without credentials (CLI maps to exit 7).

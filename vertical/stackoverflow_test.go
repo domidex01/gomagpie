@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/vertical"
+	"github.com/domidex01/magpie/vertical"
 )
 
 // Fixture stackoverflow.json / stackoverflow-answers.json: recorded

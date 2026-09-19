@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/scrape"
+	"github.com/domidex01/magpie/scrape"
 )
 
 func loadMoreOrigin(t *testing.T) string {

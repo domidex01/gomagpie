@@ -3,7 +3,7 @@ package core_test
 import (
 	"testing"
 
-	"magpie/core"
+	"github.com/domidex01/magpie/core"
 )
 
 func TestRegistry_Gate(t *testing.T) {

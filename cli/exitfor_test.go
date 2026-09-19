@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/clean"
-	"magpie/crawl"
-	"magpie/fetch"
-	"magpie/scrape"
-	"magpie/vertical"
+	"github.com/domidex01/magpie/clean"
+	"github.com/domidex01/magpie/crawl"
+	"github.com/domidex01/magpie/fetch"
+	"github.com/domidex01/magpie/scrape"
+	"github.com/domidex01/magpie/vertical"
 )
 
 // Table over the single exit-code map (exitCode — pure, no printing).

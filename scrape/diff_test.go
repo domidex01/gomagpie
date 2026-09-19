@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/scrape"
+	"github.com/domidex01/magpie/scrape"
 )
 
 // words builds n distinct words for boundary rows — generated, never fixtures.

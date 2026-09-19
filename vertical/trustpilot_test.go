@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/vertical"
+	"github.com/domidex01/magpie/vertical"
 )
 
 // Fixture trustpilot.html (recorded 2026-09-19): a synthetic shape

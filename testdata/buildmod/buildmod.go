@@ -6,7 +6,7 @@ package buildmod
 import (
 	"os"
 
-	"magpie/core"
+	"github.com/domidex01/magpie/core"
 )
 
 func init() {

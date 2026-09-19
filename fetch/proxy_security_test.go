@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"magpie/fetch"
+	"github.com/domidex01/magpie/fetch"
 )
 
 func poolFile(t *testing.T, lines ...string) string {

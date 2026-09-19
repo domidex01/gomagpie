@@ -12,12 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"magpie/clean"
-	"magpie/core"
-	"magpie/extract"
-	"magpie/fetch"
-	"magpie/selector"
-	"magpie/store"
+	"github.com/domidex01/magpie/clean"
+	"github.com/domidex01/magpie/core"
+	"github.com/domidex01/magpie/extract"
+	"github.com/domidex01/magpie/fetch"
+	"github.com/domidex01/magpie/selector"
+	"github.com/domidex01/magpie/store"
 )
 
 // ErrRobotsBlocked marks a crawl refused by robots.txt (deny or unreachable).

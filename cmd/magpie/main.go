@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"magpie/cli"
+	"github.com/domidex01/magpie/cli"
 )
 
 func main() {

@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"magpie/fetch"
+	"github.com/domidex01/magpie/fetch"
 )
 
 // fakeSitemapFetcher is the crawl-side copy of the substring→bytes fake,

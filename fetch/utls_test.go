@@ -14,7 +14,7 @@ import (
 
 	impersonate "github.com/North-web-dev/impersonate-http"
 
-	"magpie/fetch"
+	"github.com/domidex01/magpie/fetch"
 )
 
 func browserOrigin(t *testing.T, hits *atomic.Int64) (*httptest.Server, *string) {

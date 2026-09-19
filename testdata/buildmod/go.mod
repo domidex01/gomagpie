@@ -2,6 +2,6 @@ module buildmod
 
 go 1.26.5
 
-require magpie v0.0.0
+require github.com/domidex01/magpie v0.0.0
 
-replace magpie => ../..
+replace github.com/domidex01/magpie => ../..

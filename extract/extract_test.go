@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"magpie/extract"
+	"github.com/domidex01/magpie/extract"
 )
 
 type fakeProvider struct {

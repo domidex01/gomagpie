@@ -6,8 +6,8 @@
 package mcp
 
 import (
-	"magpie/scrape"
-	"magpie/store"
+	"github.com/domidex01/magpie/scrape"
+	"github.com/domidex01/magpie/store"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )

@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"magpie/crawl"
-	"magpie/extract"
-	"magpie/fetch"
-	"magpie/scrape"
-	"magpie/store"
+	"github.com/domidex01/magpie/crawl"
+	"github.com/domidex01/magpie/extract"
+	"github.com/domidex01/magpie/fetch"
+	"github.com/domidex01/magpie/scrape"
+	"github.com/domidex01/magpie/store"
 )
 
 var _ extract.Prompter = (*fakePrompterExtractor)(nil)

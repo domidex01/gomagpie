@@ -271,6 +271,34 @@ func (d *DB) GetRun(runID string) (RunInfo, error) {
 	return r, nil
 }
 
+// ListRuns returns up to limit recent runs, newest first. started_at has
+// second granularity (RFC3339), so rowid (insertion order) breaks ties —
+// same-second runs still sort deterministically. Feeds the desktop
+// History screen; limit <= 0 means all.
+func (d *DB) ListRuns(limit int) ([]RunInfo, error) {
+	q := `SELECT run_id, command, started_at, finished_at, status, pages_ok, pages_err, prompt_tokens, completion_tokens, usd_estimate, fetch_pages, fetch_bytes, fetch_ms, proxy FROM run_history ORDER BY started_at DESC, rowid DESC`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := d.db.Query(q)
+	if err != nil {
+		return nil, fmt.Errorf("store: list runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }() //nolint:errcheck // read-only; close error unactionable
+	var out []RunInfo
+	for rows.Next() {
+		var r RunInfo
+		var finished sql.NullString
+		if err := rows.Scan(&r.RunID, &r.Command, &r.StartedAt, &finished, &r.Status, &r.PagesOK, &r.PagesErr, &r.PromptTokens, &r.CompletionTokens, &r.USDEstimate,
+			&r.FetchPages, &r.FetchBytes, &r.FetchMs, &r.Proxy); err != nil {
+			return nil, fmt.Errorf("store: list runs: %w", err)
+		}
+		r.FinishedAt = finished.String
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // LogFetch accumulates one successful page fetch (bytes, milliseconds)
 // into the run row, so cost and volume questions have one answer.
 func (d *DB) LogFetch(runID string, nBytes, ms int64) error {

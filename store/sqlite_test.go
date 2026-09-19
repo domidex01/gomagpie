@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"magpie/store"
+	"github.com/domidex01/magpie/store"
 )
 
 func openTempDB(t *testing.T) *store.DB {
@@ -417,5 +417,44 @@ func TestMigration_AddsProxyColumn(t *testing.T) {
 	}
 	if info.Proxy != "" {
 		t.Errorf("fresh run proxy = %q, want ''", info.Proxy)
+	}
+}
+
+func TestListRuns(t *testing.T) {
+	db := openTempDB(t)
+	for _, id := range []string{"run-a", "run-b", "run-c"} {
+		if err := db.BeginRun(id, "crawl"); err != nil {
+			t.Fatalf("BeginRun %s: %v", id, err)
+		}
+		if err := db.FinishRun(id, 2, 1, "finished"); err != nil {
+			t.Fatalf("FinishRun %s: %v", id, err)
+		}
+	}
+	// started_at has second granularity; same-second runs tie on the
+	// timestamp — insertion order (rowid) must break the tie newest-first.
+	runs, err := db.ListRuns(0)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 3 {
+		t.Fatalf("runs = %d, want 3", len(runs))
+	}
+	if runs[0].RunID != "run-c" || runs[1].RunID != "run-b" || runs[2].RunID != "run-a" {
+		t.Errorf("order = [%s %s %s], want [run-c run-b run-a] (newest first)", runs[0].RunID, runs[1].RunID, runs[2].RunID)
+	}
+	for _, r := range runs {
+		if r.Command != "crawl" || r.Status != "finished" || r.PagesOK != 2 || r.PagesErr != 1 {
+			t.Errorf("row %s = %+v, want crawl/finished 2/1", r.RunID, r)
+		}
+		if r.StartedAt == "" {
+			t.Errorf("row %s: empty started_at", r.RunID)
+		}
+	}
+	limited, err := db.ListRuns(2)
+	if err != nil {
+		t.Fatalf("ListRuns(2): %v", err)
+	}
+	if len(limited) != 2 || limited[0].RunID != "run-c" || limited[1].RunID != "run-b" {
+		t.Errorf("limited = %v, want [run-c run-b]", limited)
 	}
 }

@@ -7,11 +7,11 @@ import (
 	"os"
 	"strings"
 
-	"magpie/clean"
-	"magpie/config"
-	"magpie/extract"
-	"magpie/fetch"
-	"magpie/scrape"
+	"github.com/domidex01/magpie/clean"
+	"github.com/domidex01/magpie/config"
+	"github.com/domidex01/magpie/extract"
+	"github.com/domidex01/magpie/fetch"
+	"github.com/domidex01/magpie/scrape"
 
 	"github.com/spf13/cobra"
 )
