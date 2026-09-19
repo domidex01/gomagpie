@@ -12,6 +12,7 @@ import (
 	"magpie/config"
 	"magpie/crawl"
 	"magpie/extract"
+	"magpie/fetch"
 	"magpie/scrape"
 	"magpie/store"
 )
@@ -185,11 +186,12 @@ func checkCostCeiling(db *store.DB, runID, provider, model, promptText string, m
 }
 
 type markdownOut struct {
-	URL            string          `json:"url"`
-	FinalURL       string          `json:"final_url"`
-	Title          string          `json:"title"`
-	Markdown       string          `json:"markdown"`
-	StructuredData json.RawMessage `json:"structured_data"`
+	URL            string             `json:"url"`
+	FinalURL       string             `json:"final_url"`
+	Title          string             `json:"title"`
+	Markdown       string             `json:"markdown"`
+	StructuredData json.RawMessage    `json:"structured_data"`
+	XHR            []fetch.XHRCapture `json:"xhr,omitempty"`
 }
 
 type usageOut struct {

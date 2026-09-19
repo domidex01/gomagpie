@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "price", "sku"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "x-magpie": { "css_hint": ".product .name", "trim": true }
+    },
+    "price": {
+      "type": "string",
+      "x-magpie": { "css_hint": ".product .price", "regex": "[0-9.]+" }
+    },
+    "sku": {
+      "type": "string",
+      "x-magpie": { "css_hint": ".product .sku", "regex": "MP-[0-9]+" }
+    }
+  }
+}

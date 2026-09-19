@@ -112,6 +112,10 @@ func exitCode(err error) int {
 		code = 8
 	case errors.Is(err, crawl.ErrRobotsBlocked):
 		code = 5
+	case errors.Is(err, crawl.ErrSitemapOnlyEmpty):
+		// All "pages" failed to even enqueue — the no-pages code, not the
+		// default 1 (exit codes are documented contract).
+		code = 3
 	case errors.Is(err, vertical.ErrURLMismatch),
 		errors.Is(err, fetch.ErrPrivateAddress),
 		errors.Is(err, fetch.ErrProxyConfig),

@@ -34,6 +34,7 @@ func TestExitCode(t *testing.T) {
 		{"bad scope", fmt.Errorf("crawl: %w", crawl.ErrBadScope), 2},
 		{"private address", fmt.Errorf("fetch: %w", fetch.ErrPrivateAddress), 2},
 		{"vertical mismatch", fmt.Errorf("scrape: vertical reddit: %w", vertical.ErrURLMismatch), 2},
+		{"sitemap-only empty", fmt.Errorf("crawl: %w", crawl.ErrSitemapOnlyEmpty), 3},
 		{"usage cmdError", fail(3, "crawl: no records extracted"), 3},
 	}
 	for _, tt := range tests {
@@ -83,5 +84,21 @@ func TestExitCode_ProxyConfig(t *testing.T) {
 	err := fmt.Errorf("fetch: proxy pool line 3: %w", fetch.ErrProxyConfig)
 	if got := exitCode(err); got != 2 {
 		t.Errorf("exitCode(proxy config) = %d, want 2", got)
+	}
+}
+
+// Phase J: the --sitemap-only + --no-sitemap contradiction exits 2 at
+// the crawl edge, before any I/O (the nonexistent seed file is never
+// touched — an I/O failure would exit differently).
+func TestExitCode_SitemapOnlyConflict(t *testing.T) {
+	testEnv(t, "cache.db")
+	err := runCrawl(t.Context(), "file:///nonexistent-conflict-probe.html", crawlCLIOptions{
+		Schema: priceSchema(t), Format: "jsonl", SitemapOnly: true, NoSitemap: true,
+	})
+	if got := codeOf(err); got != 2 {
+		t.Fatalf("exit = %d, want 2 (err=%v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "contradictory") {
+		t.Errorf("err = %v, want the contradiction named", err)
 	}
 }

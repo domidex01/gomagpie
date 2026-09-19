@@ -12,6 +12,7 @@ import (
 	"magpie/clean"
 	"magpie/crawl"
 	"magpie/extract"
+	"magpie/fetch"
 	"magpie/scrape"
 	"magpie/selector"
 	"magpie/store"
@@ -41,18 +42,21 @@ type ScrapeIn struct {
 	Cookies         string     `json:"cookies,omitempty" jsonschema:"raw Cookie header value"`
 	Actions         StringList `json:"actions,omitempty" jsonschema:"browser action lines (rod), one per element: click <sel> | type <sel> <text> | scroll <n|top|bottom> | wait <ms> | wait-for <sel> | eval-js <expr>; forces browser rendering; screenshot is CLI-only"`
 	Lang            string     `json:"lang,omitempty" jsonschema:"Accept-Language header value, e.g. fr-CA,fr;q=0.9 (no control characters)"`
+	CaptureXHR      StringList `json:"capture_xhr,omitempty" jsonschema:"Go regexps: capture matching XHR/fetch response bodies (browser rendering only)"`
+	CDP             string     `json:"cdp_url,omitempty" jsonschema:"remote browser CDP endpoint (ws://, wss://, http(s)://); overrides MAGPIE_CDP_URL"`
 }
 
 // ScrapeOut is the scrape_url output.
 type ScrapeOut struct {
-	URL       string         `json:"url" jsonschema:"requested URL"`
-	FinalURL  string         `json:"final_url" jsonschema:"final URL after redirects"`
-	Title     string         `json:"title" jsonschema:"page title"`
-	Markdown  string         `json:"markdown,omitempty" jsonschema:"cleaned markdown (no schema)"`
-	Content   string         `json:"content,omitempty" jsonschema:"rendered page content in page_format (no schema)"`
-	Extracted map[string]any `json:"extracted,omitempty" jsonschema:"extracted record (with schema)"`
-	FromCache bool           `json:"from_cache" jsonschema:"served from selector cache with zero LLM calls"`
-	Usage     map[string]any `json:"usage,omitempty" jsonschema:"LLM usage when the extractor ran"`
+	URL       string             `json:"url" jsonschema:"requested URL"`
+	FinalURL  string             `json:"final_url" jsonschema:"final URL after redirects"`
+	Title     string             `json:"title" jsonschema:"page title"`
+	Markdown  string             `json:"markdown,omitempty" jsonschema:"cleaned markdown (no schema)"`
+	Content   string             `json:"content,omitempty" jsonschema:"rendered page content in page_format (no schema)"`
+	Extracted map[string]any     `json:"extracted,omitempty" jsonschema:"extracted record (with schema)"`
+	FromCache bool               `json:"from_cache" jsonschema:"served from selector cache with zero LLM calls"`
+	Usage     map[string]any     `json:"usage,omitempty" jsonschema:"LLM usage when the extractor ran"`
+	XHR       []fetch.XHRCapture `json:"xhr,omitempty" jsonschema:"captured XHR/fetch response bodies (with capture_xhr)"`
 }
 
 func handleScrape(d Deps) func(context.Context, *sdk.CallToolRequest, ScrapeIn) (*sdk.CallToolResult, ScrapeOut, error) {
@@ -96,11 +100,12 @@ func handleScrape(d Deps) func(context.Context, *sdk.CallToolRequest, ScrapeIn) 
 			Scope:      clean.Scope{Include: []string(in.Include), Exclude: []string(in.Exclude), OnlyMainContent: onlyMain},
 			Profile:    in.Profile, Cookies: in.Cookies, Browser: in.Browser,
 			Actions: []string(in.Actions), Lang: in.Lang,
+			CaptureXHR: []string(in.CaptureXHR), CDP: in.CDP,
 		})
 		if err != nil {
 			return nil, ScrapeOut{}, fmt.Errorf("mcp: scrape_url: %w", err)
 		}
-		out := ScrapeOut{URL: res.URL, FinalURL: res.FinalURL, Title: res.Title, FromCache: res.FromCache}
+		out := ScrapeOut{URL: res.URL, FinalURL: res.FinalURL, Title: res.Title, FromCache: res.FromCache, XHR: res.XHR}
 		if sch == nil {
 			out.Markdown = res.Markdown
 			if in.PageFormat != "" {
@@ -135,6 +140,8 @@ type CrawlIn struct {
 	Exclude         StringList `json:"exclude,omitempty" jsonschema:"URL globs to exclude (wins over include)"`
 	AllowSubdomains *FlexBool  `json:"allow_subdomains,omitempty" jsonschema:"follow links into subdomains of the seed host"`
 	NoSitemap       *FlexBool  `json:"no_sitemap,omitempty" jsonschema:"skip sitemap seed expansion"`
+	SitemapOnly     *FlexBool  `json:"sitemap_only,omitempty" jsonschema:"frontier = sitemap URLs only (no seed enqueue, no link-following); contradicts no_sitemap"`
+	AutoThrottle    *FlexBool  `json:"auto_throttle,omitempty" jsonschema:"adaptive per-host pacing: back off on 429/5xx, decay on success"`
 	Browser         string     `json:"browser,omitempty" jsonschema:"TLS-impersonating browser fingerprint: chrome, firefox, safari, edge, ios, chrome_android, or random"`
 	Schema          FlexMap    `json:"schema,omitempty" jsonschema:"JSON Schema object for extraction"`
 	RunID           string     `json:"run_id,omitempty" jsonschema:"poll a previous run instead of crawling"`
@@ -183,6 +190,12 @@ func handleCrawl(d Deps) func(context.Context, *sdk.CallToolRequest, CrawlIn) (*
 		}
 		sameHost := flexBool(in.SameHost, true)
 		allowSubdomains, noSitemap := flexBool(in.AllowSubdomains, false), flexBool(in.NoSitemap, false)
+		sitemapOnly, autoThrottle := flexBool(in.SitemapOnly, false), flexBool(in.AutoThrottle, false)
+		// Contradiction check rides the crawl-side predicate so CLI and MCP
+		// can never drift (the crawl package owns its option semantics).
+		if err := crawl.ValidateSitemapOnly(sitemapOnly, noSitemap); err != nil {
+			return nil, CrawlOut{}, fmt.Errorf("mcp: crawl_site: %w", err)
+		}
 		key := ""
 		if d.ScrapeDeps.APIKeyFor != nil {
 			key = d.ScrapeDeps.APIKeyFor(d.DefaultProvider)
@@ -210,6 +223,7 @@ func handleCrawl(d Deps) func(context.Context, *sdk.CallToolRequest, CrawlIn) (*
 			SameHost: sameHost, PathPrefix: in.PathPrefix,
 			Include: []string(in.Include), Exclude: []string(in.Exclude),
 			AllowSubdomains: allowSubdomains, NoSitemap: noSitemap,
+			SitemapOnly: sitemapOnly, AutoThrottle: autoThrottle,
 			Format: "jsonl", Out: os.DevNull, RunID: runID,
 			Browser:  in.Browser,
 			Provider: d.DefaultProvider, Model: d.DefaultModel, MaxCost: d.MaxCost,
