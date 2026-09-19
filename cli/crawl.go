@@ -14,6 +14,7 @@ import (
 	pluginExec "magpie/plugin/exec"
 	"magpie/scrape"
 	"magpie/selector"
+	"magpie/store"
 
 	"github.com/spf13/cobra"
 )
@@ -177,8 +178,8 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		if cfg.Schema != "" {
 			return fail(2, "crawl: --corpus and --schema are mutually exclusive")
 		}
-		if cfg.Format != "" && cfg.Format != "jsonl" {
-			return fail(2, "crawl: corpus mode requires --format jsonl")
+		if err := crawl.ValidateCorpus(true, cfg.Format); err != nil {
+			return fail(2, "%v", err)
 		}
 		cfg.Format = "jsonl"
 	} else if cfg.Schema == "" {
@@ -201,8 +202,6 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	// no extractor wiring — Run gets Extractor/Propose nil and never calls them.
 	var key string
 	var sch *extract.Schema
-	var ex extract.Extractor
-	var propose selector.ProposeFunc
 	if !o.Corpus {
 		key = cfg.APIKey(provider)
 		if key == "" && needsAPIKey(provider) {
@@ -236,48 +235,12 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 	if !resuming {
 		runID = uuidNew()
 	}
+	var ex extract.Extractor
+	var propose selector.ProposeFunc
 	if !o.Corpus {
-		ex, err = newExtractor(provider, key, model, sch, db, runID)
+		ex, propose, err = wireExtractor(provider, key, model, sch, db, runID, cfg.MaxCost)
 		if err != nil {
 			return err
-		}
-		propose = func(pctx context.Context, fields []string, trimmed string) (map[string]string, error) {
-			props := map[string]any{}
-			for _, f := range fields {
-				props[f] = map[string]any{"type": "string"}
-			}
-			raw, merr := json.Marshal(map[string]any{
-				"type": "object", "properties": props,
-				"required": fields, "additionalProperties": false,
-			})
-			if merr != nil {
-				return nil, merr
-			}
-			asch, merr := extract.ParseSchema(raw)
-			if merr != nil {
-				return nil, merr
-			}
-			pex, err := newExtractor(provider, key, model, asch, db, runID)
-			if err != nil {
-				return nil, err
-			}
-			if cerr := checkCostCeiling(db, runID, provider, model, trimmed, cfg.MaxCost); cerr != nil {
-				return nil, cerr
-			}
-			res, xerr := pex.Extract(pctx, extract.ExtractInput{
-				Markdown: "Propose one CSS selector per required field that extracts its value from the page below.\n\n" + trimmed,
-				Schema:   asch, Purpose: "synth",
-			})
-			if xerr != nil {
-				return nil, xerr
-			}
-			out := map[string]string{}
-			for _, f := range fields {
-				if v, ok := res.Record[f].(string); ok && v != "" {
-					out[f] = v
-				}
-			}
-			return out, nil
 		}
 	}
 
@@ -332,4 +295,53 @@ func runCrawl(ctx context.Context, seedURL string, o crawlCLIOptions) error {
 		return fail(4, "crawl: partial success (%d pages errored)", res.PagesErr)
 	}
 	return nil
+}
+
+// wireExtractor builds the per-run LLM extractor and the selector-proposal
+// step (synthesis) — one cohesive unit: both exist only in extracted mode,
+// and corpus mode passes nil/nil all the way to crawl.Run.
+func wireExtractor(provider, key, model string, sch *extract.Schema, db *store.DB, runID string, maxCost float64) (extract.Extractor, selector.ProposeFunc, error) {
+	ex, err := newExtractor(provider, key, model, sch, db, runID)
+	if err != nil {
+		return nil, nil, err
+	}
+	propose := func(pctx context.Context, fields []string, trimmed string) (map[string]string, error) {
+		props := map[string]any{}
+		for _, f := range fields {
+			props[f] = map[string]any{"type": "string"}
+		}
+		raw, merr := json.Marshal(map[string]any{
+			"type": "object", "properties": props,
+			"required": fields, "additionalProperties": false,
+		})
+		if merr != nil {
+			return nil, merr
+		}
+		asch, merr := extract.ParseSchema(raw)
+		if merr != nil {
+			return nil, merr
+		}
+		pex, err := newExtractor(provider, key, model, asch, db, runID)
+		if err != nil {
+			return nil, err
+		}
+		if cerr := checkCostCeiling(db, runID, provider, model, trimmed, maxCost); cerr != nil {
+			return nil, cerr
+		}
+		res, xerr := pex.Extract(pctx, extract.ExtractInput{
+			Markdown: "Propose one CSS selector per required field that extracts its value from the page below.\n\n" + trimmed,
+			Schema:   asch, Purpose: "synth",
+		})
+		if xerr != nil {
+			return nil, xerr
+		}
+		out := map[string]string{}
+		for _, f := range fields {
+			if v, ok := res.Record[f].(string); ok && v != "" {
+				out[f] = v
+			}
+		}
+		return out, nil
+	}
+	return ex, propose, nil
 }

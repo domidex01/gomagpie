@@ -129,6 +129,16 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	return cc.runPipeline(ctx)
 }
 
+// ValidateCorpus rejects an impossible corpus/format pair. Shared by the
+// CLI edge (exit 2) and newCrawlContext (Options error) so the rule can't
+// drift between them.
+func ValidateCorpus(corpus bool, format string) error {
+	if corpus && format != "" && format != "jsonl" {
+		return fmt.Errorf("crawl: corpus mode requires --format jsonl")
+	}
+	return nil
+}
+
 // newCrawlContext validates options and derives the run-wide defaults:
 // maxPages/maxDepth/format, compiled scope, schema hash, and run ID.
 func newCrawlContext(opts Options) (*crawlContext, error) {
@@ -141,8 +151,8 @@ func newCrawlContext(opts Options) (*crawlContext, error) {
 	if opts.Extractor == nil && !opts.Corpus {
 		return nil, fmt.Errorf("crawl: nil extractor")
 	}
-	if opts.Corpus && opts.Format != "" && opts.Format != "jsonl" {
-		return nil, fmt.Errorf("crawl: corpus mode requires --format jsonl")
+	if err := ValidateCorpus(opts.Corpus, opts.Format); err != nil {
+		return nil, err
 	}
 	cc := &crawlContext{db: opts.DB, opts: opts}
 	cc.maxPages = opts.MaxPages
