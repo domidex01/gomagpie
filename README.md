@@ -2,7 +2,7 @@
 
 [![Go 1.26+](https://img.shields.io/badge/go-1.26+-blue.svg)](go.mod)
 [![CGO-free](https://img.shields.io/badge/CGO-free-green.svg)](spec.md)
-[![License: TBD](https://img.shields.io/badge/license-TBD-lightgrey.svg)](#license)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 
 A fast, single-binary web scraper for humans and agents: fetch a page,
 strip the boilerplate, and get clean Markdown — plus optional structured
@@ -692,9 +692,9 @@ See `go.mod` / `go.sum` for the full dependency list and their licenses.
 
 ## License
 
-No `LICENSE` file has been chosen yet — until one is added, all rights
-are reserved by default. If you intend to use or distribute this project,
-open an issue to confirm the intended license first.
+[MIT](LICENSE) — © 2026 Dominique Degottex. Contributions are welcome
+under the terms in [CONTRIBUTING.md](CONTRIBUTING.md) (MIT + a relicensing
+grant so the project can evolve its license as it grows).
 
 ## Last Updated
 
